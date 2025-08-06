@@ -33,17 +33,27 @@ In Xcode, select your app target and go to **Signing & Capabilities**. Choose yo
 ### 2. Add Your API Key
 In order to unlock the SDK, you will need to provide your API key. You can create one at [https://app.argmaxinc.com](https://app.argmaxinc.com).
 
-In `DefaultEnvInitializer.swift`, update the following code with your credentials:
+#### Option 1: Using Configuration File (Recommended)
+1. Copy the template configuration file:
+   ```bash
+   cp Playground/Resources/config.template.json Playground/Resources/config.json
+   ```
+2. Edit `Playground/Resources/config.json` and replace `YOUR_API_KEY_HERE` with your actual API key:
+   ```json
+   {
+       "apiKey": "your_actual_api_key_here"
+   }
+   ```
+
+The `config.json` file is already added to `.gitignore` to prevent accidentally committing your API key.
+
+#### Option 2: Direct Code Modification
+Alternatively, you can modify the fallback API key in `DefaultEnvInitializer.swift`:
 
 ```swift
-public class DefaultEnvInitializer: PlaygroundEnvInitializer {
-
-    public func createAPIKeyProvider() -> APIKeyProvider {
-        return PlainTextAPIKeyProvider(
-            apiKey: "", // TODO: Add your Argmax SDK API key
-        )
-    }
-}
+return PlainTextAPIKeyProvider(
+    apiKey: "your_api_key_here" // Fallback API key
+)
 ```
 
-> **Do not commit your API key.**.
+> **Important**: Never commit your actual API key to version control.
