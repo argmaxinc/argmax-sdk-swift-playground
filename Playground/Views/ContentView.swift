@@ -75,6 +75,7 @@ struct ContentView: View {
     @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
     @AppStorage("maxSilenceBufferLength") private var maxSilenceBufferLength: Double = 10.0
     @AppStorage("transcribeInterval") private var transcribeInterval: Double = 0.1
+    @AppStorage("minProcessInterval") private var minProcessInterval: Double = 0.0
     @AppStorage("transcriptionMode") private var transcriptionModeRawValue: String = TranscriptionModeSelection.voiceTriggered.rawValue
     @AppStorage("useVAD") private var useVAD: Bool = true
     @AppStorage("tokenConfirmationsNeeded") private var tokenConfirmationsNeeded: Double = 2
@@ -1444,6 +1445,18 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal)
+                    
+                    VStack {
+                        Text("Min Process Interval")
+                        HStack {
+                            Slider(value: $minProcessInterval, in: 0.05...1.0, step: 0.05)
+                            Text(minProcessInterval.formatted(.number.precision(.fractionLength(2))))
+                                .frame(width: 30)
+                                .lineLimit(1)
+                            InfoButton("Minimum interval the incoming stream data is fed to transcription pipeline.")
+                        }
+                    }
+                    .padding(.horizontal)
                 }
             }
             
@@ -2064,7 +2077,7 @@ struct ContentView: View {
                 case .alwaysOn:
                     streamMode = .alwaysOn
                 case .voiceTriggered:
-                    streamMode = .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength))
+                    streamMode = .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength), minProcessInterval: Float(minProcessInterval))
                 case .batteryOptimized:
                     streamMode = .batteryOptimized
                 }
