@@ -27,7 +27,7 @@ import Hub
 ///
 /// The view integrates with several key components:
 /// - `StreamViewModel`: Manages real-time audio streaming and transcription
-/// - `TranscribeViewModel`: Handles file-based transcription and recording workflows  
+/// - `TranscribeViewModel`: Handles file-based transcription and recording workflows
 /// - `ArgmaxSDKCoordinator`: Coordinates access to WhisperKit and SpeakerKit instances
 /// - Audio discovery services for device and process selection (macOS)
 ///
@@ -1449,8 +1449,8 @@ struct ContentView: View {
                     VStack {
                         Text("Min Process Interval")
                         HStack {
-                            Slider(value: $minProcessInterval, in: 0.05...1.0, step: 0.05)
-                            Text(minProcessInterval.formatted(.number.precision(.fractionLength(2))))
+                            Slider(value: $minProcessInterval, in: 0...15, step: 1)
+                            Text(minProcessInterval.formatted(.number.precision(.fractionLength(0))))
                                 .frame(width: 30)
                                 .lineLimit(1)
                             InfoButton("Minimum interval the incoming stream data is fed to transcription pipeline.")
