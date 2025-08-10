@@ -329,12 +329,16 @@ class StreamViewModel: ObservableObject {
 
             // Limit the amount of energy samples passed to the UI for performance
             let energies = whisperKitPro.audioProcessor.relativeEnergy
-            let limited = Array(energies.suffix(256))
+            #if os(iOS)
+            let newBufferEnergy = Array(energies.suffix(256))
+            #else
+            let newBufferEnergy = energies
+            #endif
             let sampleCount = whisperKitPro.audioProcessor.audioSamples.count
 
             updateStreamResult(sourceId: source.id) { oldResult in
                 var newResult = oldResult
-                newResult.bufferEnergy = limited
+                newResult.bufferEnergy = newBufferEnergy
                 newResult.bufferSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
                 return newResult
             }
