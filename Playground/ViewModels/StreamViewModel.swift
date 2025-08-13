@@ -285,7 +285,6 @@ class StreamViewModel: ObservableObject {
     private func handleResult(_ result: LiveResult, for sourceId: String) {
         switch result {
         case .hypothesis(let text, _):
-            // Throttle hypothesis UI updates to reduce layout/animation churn
             let now = Date().timeIntervalSince1970
             let last = lastHypothesisUpdateAtBySource[sourceId] ?? 0
             // Update at most 10 times per second per source
@@ -322,9 +321,8 @@ class StreamViewModel: ObservableObject {
     @MainActor
     private func updateAudioMetrics(for source: ArgmaxSource, audioData: [Float]) {
         if case .device = source.streamType, let whisperKitPro = self.sdkCoordinator.whisperKit {
-            // Throttle energy updates to ~20 fps to avoid re-rendering thousands of bars per second
             let now = Date().timeIntervalSince1970
-            guard now - lastEnergyUpdateAt >= 0.05 else { return }
+            guard now - lastEnergyUpdateAt >= 0.1 else { return }
             lastEnergyUpdateAt = now
 
             // Limit the amount of energy samples passed to the UI for performance
