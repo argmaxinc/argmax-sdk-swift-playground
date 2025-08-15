@@ -50,6 +50,9 @@ class StreamViewModel: ObservableObject {
     let sdkCoordinator: ArgmaxSDKCoordinator
     
     private var streamTasks: [Task<Void, Never>] = []
+    // Throttle guards to avoid overwhelming the UI with high-frequency updates
+    private var lastEnergyUpdateAt: TimeInterval = 0
+    private var lastHypothesisUpdateAtBySource: [String: TimeInterval] = [:]
     
     // Currently active streaming sources, set only in startTranscribing
     private var curActiveStreamSrcs: [any StreamSourceProtocol] = []
@@ -282,9 +285,16 @@ class StreamViewModel: ObservableObject {
     private func handleResult(_ result: LiveResult, for sourceId: String) {
         switch result {
         case .hypothesis(let text, _):
+            let now = Date().timeIntervalSince1970
+            let last = lastHypothesisUpdateAtBySource[sourceId] ?? 0
+            // Update at most 10 times per second per source
+            guard now - last >= 0.1 else { return }
+            lastHypothesisUpdateAtBySource[sourceId] = now
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed != (isDeviceSource(sourceId) ? deviceResult?.hypothesisText : systemResult?.hypothesisText) else { return }
             updateStreamResult(sourceId: sourceId) { oldResult in
                 var newResult = oldResult
-                newResult.hypothesisText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                newResult.hypothesisText = trimmed
                 return newResult
             }
             
@@ -311,10 +321,23 @@ class StreamViewModel: ObservableObject {
     @MainActor
     private func updateAudioMetrics(for source: ArgmaxSource, audioData: [Float]) {
         if case .device = source.streamType, let whisperKitPro = self.sdkCoordinator.whisperKit {
+            let now = Date().timeIntervalSince1970
+            guard now - lastEnergyUpdateAt >= 0.1 else { return }
+            lastEnergyUpdateAt = now
+
+            // Limit the amount of energy samples passed to the UI for performance
+            let energies = whisperKitPro.audioProcessor.relativeEnergy
+            #if os(iOS)
+            let newBufferEnergy = Array(energies.suffix(256))
+            #else
+            let newBufferEnergy = energies
+            #endif
+            let sampleCount = whisperKitPro.audioProcessor.audioSamples.count
+
             updateStreamResult(sourceId: source.id) { oldResult in
                 var newResult = oldResult
-                newResult.bufferEnergy = whisperKitPro.audioProcessor.relativeEnergy
-                newResult.bufferSeconds = Double(whisperKitPro.audioProcessor.audioSamples.count) / Double(WhisperKit.sampleRate)
+                newResult.bufferEnergy = newBufferEnergy
+                newResult.bufferSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
                 return newResult
             }
         }

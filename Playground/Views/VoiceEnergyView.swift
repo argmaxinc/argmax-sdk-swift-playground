@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// A SwiftUI view that visualizes audio buffer energy levels with threshold-based color coding.  
+/// A SwiftUI view that visualizes audio buffer energy levels with threshold-based color coding.
 /// This component provides real-time visual feedback for audio input levels and voice activity detection.
 ///
 /// ## Features
@@ -28,14 +28,12 @@ struct VoiceEnergyView: View {
     
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 1) {
-                ForEach(Array(bufferEnergy.enumerated())[0...], id: \.element) { _, energy in
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 2)
-                            .frame(width: 2, height: CGFloat(energy) * 24)
-                    }
-                    .frame(maxHeight: 24)
-                    .background(energy > Float(silenceThreshold) ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+            LazyHStack(spacing: 1) {
+                ForEach(Array(bufferEnergy.enumerated()), id: \.offset) { _, energy in
+                    RoundedRectangle(cornerRadius: 2)
+                        .frame(width: 2, height: max(0, min(CGFloat(energy), 1)) * 24)
+                        .frame(maxHeight: 24)
+                        .background(energy > Float(silenceThreshold) ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
                 }
             }
         }

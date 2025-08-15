@@ -27,7 +27,7 @@ import Hub
 ///
 /// The view integrates with several key components:
 /// - `StreamViewModel`: Manages real-time audio streaming and transcription
-/// - `TranscribeViewModel`: Handles file-based transcription and recording workflows  
+/// - `TranscribeViewModel`: Handles file-based transcription and recording workflows
 /// - `ArgmaxSDKCoordinator`: Coordinates access to WhisperKit and SpeakerKit instances
 /// - Audio discovery services for device and process selection (macOS)
 ///
@@ -75,6 +75,8 @@ struct ContentView: View {
     @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
     @AppStorage("maxSilenceBufferLength") private var maxSilenceBufferLength: Double = 10.0
     @AppStorage("transcribeInterval") private var transcribeInterval: Double = 0.1
+    @AppStorage("minProcessInterval") private var minProcessInterval: Double = 0.0
+    @AppStorage("transcriptionMode") private var transcriptionModeRawValue: String = TranscriptionModeSelection.voiceTriggered.rawValue
     @AppStorage("useVAD") private var useVAD: Bool = true
     @AppStorage("tokenConfirmationsNeeded") private var tokenConfirmationsNeeded: Double = 2
     @AppStorage("concurrentWorkerCount") private var concurrentWorkerCount: Double = 4
@@ -91,6 +93,16 @@ struct ContentView: View {
     @AppStorage("fastLoadDecoderComputeUnits") private var fastLoadDecoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
     #endif
     @AppStorage("trackingPermissionStatePro") private var trackingPermissionStateRawValue: Int = TrackingPermissionState.undetermined.rawValue
+    
+    /// Computed property to work with transcription mode as an enum
+    private var transcriptionMode: TranscriptionModeSelection {
+        get {
+            TranscriptionModeSelection(rawValue: transcriptionModeRawValue) ?? .voiceTriggered
+        }
+        set {
+            transcriptionModeRawValue = newValue.rawValue
+        }
+    }
 
     // MARK: Standard properties
 
@@ -139,7 +151,6 @@ struct ContentView: View {
 
     // MARK: Alerts
 
-    @State private var showReportingAlert = false
     @State private var showShortAudioWarningAlert: Bool = false
     @State private var showPermissionAlert: Bool = false
     @State private var permissionAlertMessage: String = ""
@@ -184,18 +195,6 @@ struct ContentView: View {
             set: { newValue in
                 trackingPermissionStateRawValue = newValue ? TrackingPermissionState.granted.rawValue : TrackingPermissionState.denied.rawValue
                 Logging.debug(newValue)
-
-                if newValue {
-                    sdkCoordinator.setupArgmax()
-                    analyticsLogger.configureIfNeeded()
-                } else {
-                    Task {
-                        if await ArgmaxSDK.enabled() {
-                            await ArgmaxSDK.close()
-                        }
-                        Logging.debug("Shutting down ArgmaxSDK")
-                    }
-                }
             }
         )
     }
@@ -348,18 +347,6 @@ struct ContentView: View {
                     #endif
                     .navigationSplitViewColumnWidth(min: 300, ideal: 350)
                     .padding(.horizontal)
-                    .alert(isPresented: $showReportingAlert) {
-                        Alert(
-                            title: Text("Performance Reporting"),
-                            message: Text("Help us catch bugs early and improve reliability by enabling reporting and performance monitoring. Required to enable experimental features. Learn more at [argmaxinc.com/privacy](https://www.argmaxinc.com/privacy)"),
-                            primaryButton: .default(Text("Enable reporting")) {
-                                updateTracking(state: .granted)
-                            },
-                            secondaryButton: .cancel(Text("Opt Out")) {
-                                updateTracking(state: .denied)
-                            }
-                        )
-                    }
                 } detail: {
                     VStack {
                         #if os(iOS)
@@ -447,12 +434,6 @@ struct ContentView: View {
             // Set initial state for compute units sections
             showWhisperKitComputeUnits = true
             speakerKitComputeUnitsExpanded = false
-
-            showReportingAlert = (trackingPermissionStateRawValue == 0) // undetermined
-            if trackingPermissionStateRawValue == TrackingPermissionState.granted.rawValue {
-                sdkCoordinator.setupArgmax()
-                analyticsLogger.configureIfNeeded()
-            }
 
             // Check if Pro models are supported on this OS version
             if #unavailable(macOS 15, iOS 18, watchOS 11, visionOS 2) {
@@ -1425,27 +1406,59 @@ struct ContentView: View {
             }
             .padding(.horizontal)
             
-            VStack {
-                Text("Silence Threshold")
+            Section(header: Text("Stream Mode Settings")) {
                 HStack {
-                    Slider(value: $silenceThreshold, in: 0...1, step: 0.05)
-                    Text(silenceThreshold.formatted(.number))
-                        .frame(width: 30)
-                    InfoButton("Relative silence threshold for the audio. \n Baseline is set by the quietest 100ms in the previous 2 seconds.")
+                    Picker("Mode", selection: Binding(
+                        get: { TranscriptionModeSelection(rawValue: transcriptionModeRawValue) ?? .voiceTriggered },
+                        set: { transcriptionModeRawValue = $0.rawValue }
+                    )) {
+                        ForEach(TranscriptionModeSelection.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    Spacer()
+                    InfoButton(transcriptionMode.description)
+                }
+                
+                if transcriptionMode == .voiceTriggered {
+                    VStack {
+                        Text("Silence Threshold")
+                        HStack {
+                            Slider(value: $silenceThreshold, in: 0...1, step: 0.05)
+                            Text(silenceThreshold.formatted(.number.precision(.fractionLength(1))))
+                                .frame(width: 30)
+                                .lineLimit(1)
+                            InfoButton("Relative silence threshold for the audio. \n Baseline is set by the quietest 100ms in the previous 2 seconds.")
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    VStack {
+                        Text("Max Silence Buffer Size")
+                        HStack {
+                            Slider(value: $maxSilenceBufferLength, in: 10...60, step: 1)
+                            Text(maxSilenceBufferLength.formatted(.number.precision(.fractionLength(0))))
+                                .frame(width: 30)
+                                .lineLimit(1)
+                            InfoButton("Seconds of silence to buffer before audio is sent for transcription.")
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    VStack {
+                        Text("Min Process Interval")
+                        HStack {
+                            Slider(value: $minProcessInterval, in: 0...15, step: 1)
+                            Text(minProcessInterval.formatted(.number.precision(.fractionLength(0))))
+                                .frame(width: 30)
+                                .lineLimit(1)
+                            InfoButton("Minimum interval the incoming stream data is fed to transcription pipeline.")
+                        }
+                    }
+                    .padding(.horizontal)
                 }
             }
-            .padding(.horizontal)
-            
-            VStack {
-                Text("Max Silence Buffer Size")
-                HStack {
-                    Slider(value: $maxSilenceBufferLength, in: 10...60, step: 1)
-                    Text(maxSilenceBufferLength.formatted(.number))
-                        .frame(width: 30)
-                    InfoButton("Seconds of silence to buffer before audio is sent for transcription.")
-                }
-            }
-            .padding(.horizontal)
             
             VStack {
                 Text("Transcribe Interval")
@@ -1458,21 +1471,6 @@ struct ContentView: View {
             }
             .padding(.horizontal)
 
-            Section(header: Text("Performance Reporting")) {
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text("Enable Reporting")
-                        InfoButton("Help us catch bugs early and improve reliability by enabling reporting and performance monitoring.")
-                        Spacer()
-                        Toggle("", isOn: trackingPermissionBinding)
-                    }
-                    Link(destination: URL(string: "https://www.argmaxinc.com/privacy")!) {
-                        Text("Learn more at argmaxinc.com/privacy")
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.top)
-            }
             Section(header: Text("Diarization Settings")) {
                 HStack {
                     Picker("Diarization", selection: $diarizationMode) {
@@ -2074,11 +2072,21 @@ struct ContentView: View {
                     isRecording = true
                 }
                 
+                let streamMode: StreamTranscriptionMode
+                switch transcriptionMode {
+                case .alwaysOn:
+                    streamMode = .alwaysOn
+                case .voiceTriggered:
+                    streamMode = .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength), minProcessInterval: Float(minProcessInterval))
+                case .batteryOptimized:
+                    streamMode = .batteryOptimized
+                }
+                
                 try await streamViewModel.startTranscribing(
                     options: DecodingOptionsPro(
                         base: decodingOptions,
                         transcribeInterval: transcribeInterval,
-                        streamTranscriptionMode: .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength))
+                        streamTranscriptionMode: streamMode
                     )
                 )
             } catch {
@@ -2188,6 +2196,7 @@ struct ContentView: View {
             "compression_check_window": "\(compressionCheckWindow)",
             "sample_length": "\(sampleLength)",
             "silence_threshold": "\(silenceThreshold)",
+            "transcription_mode": "\(transcriptionMode.rawValue)",
             "use_vad": "\(useVAD)",
             "token_confirmations_needed": "\(tokenConfirmationsNeeded)",
             "chunking_strategy": "\(chunkingStrategy)",

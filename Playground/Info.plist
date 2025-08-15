@@ -9,5 +9,9 @@
 		<key>NSPrivacyAccessedAPIType</key>
 		<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 </dict>
 </plist>

@@ -53,14 +53,13 @@ struct StreamResultLine: View {
                     .id("bottom")
                 }
                 .onChange(of: result.confirmedText) {
-                    withAnimation(.easeOut(duration: 0.3)) {
+                    withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
+                // Avoid animating on every hypothesis token; keep scroll position but don't animate
                 .onChange(of: result.hypothesisText) {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
+                    proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
         }
