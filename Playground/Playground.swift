@@ -76,9 +76,11 @@ struct Playground: App {
         )
         self._audioProcessDiscoverer = StateObject(wrappedValue: processDiscoverer)
         #else
+        let liveActivityMgr = LiveActivityManager()
         let streamVM = StreamViewModel(
             sdkCoordinator: coordinator,
-            audioDeviceDiscoverer: deviceDiscoverer
+            audioDeviceDiscoverer: deviceDiscoverer,
+            liveActivityManager: liveActivityMgr
         )
         #endif
         let transcribeVM = TranscribeViewModel(sdkCoordinator: coordinator)

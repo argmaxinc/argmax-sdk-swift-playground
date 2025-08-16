@@ -40,6 +40,7 @@ import Hub
 struct ContentView: View {
     @EnvironmentObject private var streamViewModel: StreamViewModel
     @EnvironmentObject private var transcribeViewModel: TranscribeViewModel
+    @Environment(\.scenePhase) private var scenePhase
     #if os(macOS)
     @EnvironmentObject private var audioProcessDiscoverer: AudioProcessDiscoverer
     #endif
@@ -523,6 +524,18 @@ struct ContentView: View {
                     selectedModel = firstModel
                 }
             }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            #if os(iOS)
+            switch newPhase {
+            case .background:
+                streamViewModel.liveActivityManager.appDidEnterBackground()
+            case .active:
+                streamViewModel.liveActivityManager.appDidEnterForeground()
+            default:
+                break
+            }
+            #endif
         }
     }
 
@@ -2492,9 +2505,11 @@ extension Color {
         keyProvider: ObfuscatedKeyProvider(mask: 12)
     )
     let deviceDiscoverer = AudioDeviceDiscoverer()
+    let liveActivityManager = LiveActivityManager()
     let streamViewModel = StreamViewModel(
         sdkCoordinator: sdkCoordinator,
-        audioDeviceDiscoverer: deviceDiscoverer
+        audioDeviceDiscoverer: deviceDiscoverer,
+        liveActivityManager: liveActivityManager
     )
     let transcribeViewModel = TranscribeViewModel(
         sdkCoordinator: sdkCoordinator
