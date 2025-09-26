@@ -32,7 +32,12 @@ class AudioDeviceDiscoverer: ObservableObject {
     #if os(macOS)
     static let noAudioDevice = AudioDevice(id: 0, name: "No Audio")
     @Published var audioDevices: [AudioDevice] = []
-    @Published var selectedAudioInput: String = ""
+    @AppStorage("selectedAudioInput") private var storedSelectedAudioInput: String = ""
+    @Published var selectedAudioInput: String = "" {
+        didSet {
+            storedSelectedAudioInput = selectedAudioInput
+        }
+    }
     #endif
     
     var selectedDiviceID: DeviceID? {
@@ -61,8 +66,16 @@ class AudioDeviceDiscoverer: ObservableObject {
             !device.name.hasPrefix(ProcessTapper.processTapperPrefix)
         }
         audioDevices = filteredDevices + [AudioDeviceDiscoverer.noAudioDevice]
-        if selectFirst, !audioDevices.isEmpty, let device = audioDevices.first {
-            selectedAudioInput = device.name
+        
+        if selectFirst, !audioDevices.isEmpty {
+            // First, try to restore the previously stored selection if it exists in current devices
+            if !storedSelectedAudioInput.isEmpty,
+               audioDevices.contains(where: { $0.name == storedSelectedAudioInput }) {
+                selectedAudioInput = storedSelectedAudioInput
+            } else if let device = audioDevices.first {
+                // Fallback to first device if stored selection is not available
+                selectedAudioInput = device.name
+            }
         }
         #endif
     }

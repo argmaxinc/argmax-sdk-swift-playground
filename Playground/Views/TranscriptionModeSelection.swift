@@ -9,11 +9,11 @@ enum TranscriptionModeSelection: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .alwaysOn:
-            return "Always-On"
+            return "Always On"
         case .voiceTriggered:
-            return "Voice-Triggered"
+            return "Voice Triggered"
         case .batteryOptimized:
-            return "Battery-Optimized"
+            return "Battery Optimized"
         }
     }
     

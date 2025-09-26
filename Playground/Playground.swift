@@ -76,9 +76,11 @@ struct Playground: App {
         )
         self._audioProcessDiscoverer = StateObject(wrappedValue: processDiscoverer)
         #else
+        let liveActivityMgr = LiveActivityManager()
         let streamVM = StreamViewModel(
             sdkCoordinator: coordinator,
-            audioDeviceDiscoverer: deviceDiscoverer
+            audioDeviceDiscoverer: deviceDiscoverer,
+            liveActivityManager: liveActivityMgr
         )
         #endif
         let transcribeVM = TranscribeViewModel(sdkCoordinator: coordinator)
@@ -102,6 +104,12 @@ struct Playground: App {
                  .onAppear {
                      sdkCoordinator.setupArgmax()
                      analyticsLogger.configureIfNeeded()
+                     #if os(iOS)
+                     // Clean up lingering activities, this might happen if app is in background for a longtime and put to sleep by system
+                     Task {
+                         await streamViewModel.liveActivityManager.cleanupOrphanedActivities()
+                     }
+                     #endif
                  }
             #if os(macOS)
                 .frame(minWidth: 1000, minHeight: 700)
