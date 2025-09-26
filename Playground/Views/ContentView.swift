@@ -45,23 +45,21 @@ struct ContentView: View {
     #endif
     @EnvironmentObject private var audioDevicesDiscoverer: AudioDeviceDiscoverer
     @EnvironmentObject private var sdkCoordinator: ArgmaxSDKCoordinator
+    @Environment(\.scenePhase) private var scenePhase
     
     // TODO: Make this configurable in the UI
     @State private var appStartTime = Date()
     private let analyticsLogger: AnalyticsLogger
 
     // MARK: Model management
-
-    @State private var localModelPath: String = ""
-    @State private var localSpeakerKitPath: String = ""
+    
     @State private var availableLanguages: [String] = []
-    @State private var disabledModels: [String] = WhisperKit.recommendedModels().disabled
 
-    @AppStorage("selectedModel") private var selectedModel: String = WhisperKit.recommendedModels().default
+    @AppStorage("selectedModel") private var selectedModel: String = ""
     @AppStorage("selectedTab") private var selectedTab: String = "Transcribe"
     @AppStorage("selectedTask") private var selectedTask: String = "transcribe"
     @AppStorage("selectedLanguage") private var selectedLanguage: String = "english"
-    @AppStorage("enableFastLoad") private var enableFastLoad: Bool = true
+    @AppStorage("enableFastLoad") private var enableFastLoad: Bool = false
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
     @AppStorage("enablePromptPrefill") private var enablePromptPrefill: Bool = true
     @AppStorage("enableCachePrefill") private var enableCachePrefill: Bool = true
@@ -75,7 +73,7 @@ struct ContentView: View {
     @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
     @AppStorage("maxSilenceBufferLength") private var maxSilenceBufferLength: Double = 10.0
     @AppStorage("transcribeInterval") private var transcribeInterval: Double = 0.1
-    @AppStorage("minProcessInterval") private var minProcessInterval: Double = 0.0
+    @AppStorage("minProcessInterval") private var minProcessInterval: Double = 0.3
     @AppStorage("transcriptionMode") private var transcriptionModeRawValue: String = TranscriptionModeSelection.voiceTriggered.rawValue
     @AppStorage("useVAD") private var useVAD: Bool = true
     @AppStorage("tokenConfirmationsNeeded") private var tokenConfirmationsNeeded: Double = 2
@@ -106,8 +104,6 @@ struct ContentView: View {
 
     // MARK: Standard properties
 
-    @State private var loadingProgressValue: Float = 0.0
-    @State private var specializationProgressRatio: Float = 0.7
     @State private var isFilePickerPresented = false
     @State private var modelLoadingTime: TimeInterval = 0
     @State private var firstTokenTime: TimeInterval = 0
@@ -139,8 +135,6 @@ struct ContentView: View {
     @State private var showWhisperKitComputeUnits: Bool = true
     @State private var showAdvancedOptions: Bool = false
     @State private var transcriptionTask: Task<Void, Never>?
-    @State private var progressAnimationTask: Task<Void, Never>?
-    @State private var progressPollingTask: Task<Void, Never>?
     #if os(macOS)
     @State private var selectedCategoryId: MenuItem.ID? = MenuItem.transcribe.id
     #else
@@ -163,7 +157,6 @@ struct ContentView: View {
     @State private var currentAnalyticsTags: [String: String] = [:]
     @State private var showDiagnosticInfo: Bool = false
     @State private var lastConfirmedSegmentEndTime: Float = 0.0
-    @State private var showOSVersionAlert: Bool = false
 
     private enum TrackingPermissionState: Int {
         case undetermined = 0
@@ -282,7 +275,15 @@ struct ContentView: View {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     VStack(alignment: .leading) {
                         #if !os(macOS)
-                        Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Playground")
+                                .font(.largeTitle)
+                                .fontWeight(.bold)
+                            Text("by Argmax")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .offset(x: 2, y: -2)
+                        }
                         #endif
                         modelSelectorView
                             .padding(.vertical)
@@ -325,26 +326,6 @@ struct ContentView: View {
                         AppInfoView()
                     }
                     .frame(maxHeight: .infinity)
-                    #if !os(macOS)
-                    .toolbar {
-                        ToolbarItem(placement: .navigation) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Playground")
-                                        .font(.largeTitle)
-                                        .fontWeight(.bold)
-                                    Text("by Argmax")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .offset(x: 2, y: -2)
-                                }
-                                .padding(.top, 24)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    #endif
                     .navigationSplitViewColumnWidth(min: 300, ideal: 350)
                     .padding(.horizontal)
                 } detail: {
@@ -434,11 +415,6 @@ struct ContentView: View {
             // Set initial state for compute units sections
             showWhisperKitComputeUnits = true
             speakerKitComputeUnitsExpanded = false
-
-            // Check if Pro models are supported on this OS version
-            if #unavailable(macOS 15, iOS 18, watchOS 11, visionOS 2) {
-                showOSVersionAlert = true
-            }
             
             streamViewModel.setConfirmedResultCallback { sourceId, confirmedResult in
                 if sourceId.contains("device"){
@@ -460,52 +436,6 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: sdkCoordinator.whisperKitModelState) { _, newState in
-            progressAnimationTask?.cancel()
-            progressPollingTask?.cancel()
-
-            switch newState {
-                case .unloaded:
-                    loadingProgressValue = 0.0
-                case .downloading:
-                    // Progress will be handled by progress polling
-                    // Only set initial progress if not already set by progress observer
-                    if loadingProgressValue == 0.0 {
-                        loadingProgressValue = 0.0
-                    }
-                case .downloaded:
-                    loadingProgressValue = specializationProgressRatio
-                case .prewarming:
-                    let startProgress = specializationProgressRatio
-                    let targetProgress = specializationProgressRatio + (1.0 - specializationProgressRatio) * 0.9
-                    progressAnimationTask = Task {
-                        await updateLoadingProgressSmoothly(from: startProgress, to: targetProgress, over: 240)
-                    }
-                case .prewarmed, .loading:
-                    loadingProgressValue = specializationProgressRatio + (1.0 - specializationProgressRatio) * 0.9
-
-                case .loaded:
-                    loadingProgressValue = 1.0
-                case .unloading:
-                    loadingProgressValue = 0.0
-                @unknown default:
-                    break
-            }
-        }
-        .onChange(of: sdkCoordinator.modelStore.progress) { _, newProgress in
-            // Start/stop progress polling based on progress availability
-            progressPollingTask?.cancel()
-
-            if let progress = newProgress, sdkCoordinator.whisperKitModelState == .downloading {
-                // Start polling for progress updates
-                progressPollingTask = Task {
-                    await pollProgressUpdates(progress: progress)
-                }
-            } else if newProgress == nil && sdkCoordinator.whisperKitModelState == .downloading {
-                // Download completed, progress will be handled by modelState change
-                loadingProgressValue = specializationProgressRatio
-            }
-        }
         .alert("Rename Speaker", isPresented: $transcribeViewModel.showSpeakerRenameAlert) {
             TextField("Speaker Name", text: $transcribeViewModel.newSpeakerName)
             Button("Cancel", role: .cancel) {}
@@ -517,12 +447,24 @@ struct ContentView: View {
         }
         .task {
             await sdkCoordinator.updateModelList()
-            
             await MainActor.run {
-                if let firstModel = sdkCoordinator.modelStore.availableModels.flatMap({ $0.models }).first {
-                    selectedModel = firstModel
+                // Only update to first available if selectedModel is not available
+                if !sdkCoordinator.availableModelNames.contains(selectedModel) {
+                    if let firstModel = sdkCoordinator.modelStore.availableModels.flatMap({ $0.models }).first {
+                        selectedModel = firstModel
+                    }
                 }
             }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            #if os(iOS)
+            if newPhase == .active {
+                // Dismiss interrupted Live Activities when user opens the app
+                Task {
+                    await streamViewModel.liveActivityManager.handleAppEnteredForeground()
+                }
+            }
+            #endif
         }
     }
 
@@ -672,23 +614,6 @@ struct ContentView: View {
                     }
                 }
                 .padding(.bottom, 4)
-                .alert("System Update Required", isPresented: $showOSVersionAlert) {
-                    Button("OK") {
-                        showOSVersionAlert = false
-                    }
-                } message: {
-                    #if os(macOS)
-                    Text("Pro models require macOS 15 or later, but you can still use the standard models.")
-                    #elseif os(iOS)
-                    Text("Pro models require iOS 18 or later, but you can still use the standard models.")
-                    #elseif os(watchOS)
-                    Text("Pro models require watchOS 11 or later, but you can still use the standard models.")
-                    #elseif os(visionOS)
-                    Text("Pro models require visionOS 2 or later, but you can still use the standard models.")
-                    #else
-                    Text("Pro models require macOS 15, iOS 18, watchOS 11, or visionOS 2 or later, but you can still use the standard models.")
-                    #endif
-                }
                 .alert("Microphone Permission Required", isPresented: $showPermissionAlert) {
                     Button("OK") {
                         showPermissionAlert = false
@@ -705,14 +630,13 @@ struct ContentView: View {
                     Text(streamingError?.alertMessage ?? "An error occurred")
                 }
                 HStack {
-                    if !sdkCoordinator.modelStore.availableModels.isEmpty {
-                        let availableModels = sdkCoordinator.modelStore.availableModels.flatMap { $0.models }
-                        let localModels = sdkCoordinator.modelStore.localModels.flatMap { $0.models }
+                    if !sdkCoordinator.availableModelNames.isEmpty {
+                        let localModelNames = sdkCoordinator.modelStore.localModels.flatMap { $0.models }.map { $0.description }
                         Picker("", selection: $selectedModel) {
-                            ForEach(availableModels, id : \.self) { model in
+                            ForEach(sdkCoordinator.availableModelNames, id : \.self) { model in
                                 HStack {
-                                    let modelIcon = localModels.contains { $0 == model.description } ? "checkmark.circle" : "arrow.down.circle.dotted"
-                                    Text("\(Image(systemName: modelIcon)) \(model.description.components(separatedBy: "_").dropFirst().joined(separator: " "))").tag(model.description)
+                                    let modelIcon = localModelNames.contains(model) ? "checkmark.circle" : "arrow.down.circle.dotted"
+                                    Text("\(Image(systemName: modelIcon)) \(model.components(separatedBy: "_").dropFirst().joined(separator: " "))").tag(model)
                                 }
                             }
                         }
@@ -774,17 +698,17 @@ struct ContentView: View {
                 } else if sdkCoordinator.whisperKitModelState != .loaded {
                     VStack {
                         HStack {
-                            ProgressView(value: loadingProgressValue, total: 1.0)
+                            ProgressView(value: sdkCoordinator.whisperKitModelProgress, total: 1.0)
                                 .progressViewStyle(.linear)
                                 .frame(maxWidth: .infinity)
                             
-                            Text(String(format: "%.1f%%", loadingProgressValue * 100))
+                            Text(String(format: "%.1f%%", sdkCoordinator.whisperKitModelProgress * 100))
                                 .font(.caption)
                                 .foregroundColor(.gray)
                             
                             Button {
                                 // Only delete if model wasnt fully downloaded
-                                cancelDownload(delete: loadingProgressValue < 0.7)
+                                cancelDownload(delete: sdkCoordinator.whisperKitModelProgress < 0.7)
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.secondary)
@@ -1368,6 +1292,9 @@ struct ContentView: View {
                 HStack {
                     Slider(value: $temperatureStart, in: 0...1, step: 0.1)
                     Text(temperatureStart.formatted(.number))
+                        .frame(width: 44, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     InfoButton("Controls the initial randomness of the decoding loop token selection.\nA higher temperature will result in more random choices for tokens, and can improve accuracy.")
                 }
             }
@@ -1378,7 +1305,9 @@ struct ContentView: View {
                 HStack {
                     Slider(value: $fallbackCount, in: 0...5, step: 1)
                     Text(fallbackCount.formatted(.number))
-                        .frame(width: 30)
+                        .frame(width: 44, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     InfoButton("Controls how many times the decoder will fallback to a higher temperature if any of the decoding thresholds are exceeded.\n Higher values will cause the decoder to run multiple times on the same audio, which can improve accuracy at the cost of speed.")
                 }
             }
@@ -1389,7 +1318,9 @@ struct ContentView: View {
                 HStack {
                     Slider(value: $compressionCheckWindow, in: 0...100, step: 5)
                     Text(compressionCheckWindow.formatted(.number))
-                        .frame(width: 30)
+                        .frame(width: 44, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     InfoButton("Amount of tokens to use when checking for whether the model is stuck in a repetition loop.\nRepetition is checked by using zlib compressed size of the text compared to non-compressed value.\n Lower values will catch repetitions sooner, but too low will miss repetition loops of phrases longer than the window.")
                 }
             }
@@ -1400,7 +1331,9 @@ struct ContentView: View {
                 HStack {
                     Slider(value: $sampleLength, in: 0...Double(min(sdkCoordinator.whisperKit?.textDecoder.kvCacheMaxSequenceLength ?? Constants.maxTokenContext, Constants.maxTokenContext)), step: 10)
                     Text(sampleLength.formatted(.number))
-                        .frame(width: 30)
+                        .frame(width: 56, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     InfoButton("Maximum number of tokens to generate per loop.\nCan be lowered based on the type of speech in order to further prevent repetition loops from going too long.")
                 }
             }
@@ -1427,8 +1360,9 @@ struct ContentView: View {
                         HStack {
                             Slider(value: $silenceThreshold, in: 0...1, step: 0.05)
                             Text(silenceThreshold.formatted(.number.precision(.fractionLength(1))))
-                                .frame(width: 30)
+                                .frame(width: 44, alignment: .trailing)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             InfoButton("Relative silence threshold for the audio. \n Baseline is set by the quietest 100ms in the previous 2 seconds.")
                         }
                     }
@@ -1439,8 +1373,9 @@ struct ContentView: View {
                         HStack {
                             Slider(value: $maxSilenceBufferLength, in: 10...60, step: 1)
                             Text(maxSilenceBufferLength.formatted(.number.precision(.fractionLength(0))))
-                                .frame(width: 30)
+                                .frame(width: 44, alignment: .trailing)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             InfoButton("Seconds of silence to buffer before audio is sent for transcription.")
                         }
                     }
@@ -1449,10 +1384,34 @@ struct ContentView: View {
                     VStack {
                         Text("Min Process Interval")
                         HStack {
-                            Slider(value: $minProcessInterval, in: 0...15, step: 1)
-                            Text(minProcessInterval.formatted(.number.precision(.fractionLength(0))))
-                                .frame(width: 30)
+                            Slider(
+                                value: Binding<Double>(
+                                    get: {
+                                        if minProcessInterval <= 2.0 {
+                                            return minProcessInterval / 4.0
+                                        } else {
+                                            return 0.5 + (minProcessInterval - 2.0) / 26.0
+                                        }
+                                    },
+                                    set: { position in
+                                        let clamped = min(max(position, 0.0), 1.0)
+                                        if clamped <= 0.5 {
+                                            let mapped = clamped * 4.0
+                                            minProcessInterval = (mapped * 10.0).rounded() / 10.0
+                                        } else {
+                                            let mapped = 2.0 + (clamped - 0.5) * 26.0
+                                            minProcessInterval = mapped.rounded()
+                                        }
+                                    }
+                                ),
+                                in: 0...1
+                            )
+                            Text(minProcessInterval <= 2
+                                 ? minProcessInterval.formatted(.number.precision(.fractionLength(1)))
+                                 : minProcessInterval.formatted(.number.precision(.fractionLength(0))))
+                                .frame(width: 44, alignment: .trailing)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             InfoButton("Minimum interval the incoming stream data is fed to transcription pipeline.")
                         }
                     }
@@ -1465,7 +1424,9 @@ struct ContentView: View {
                 HStack {
                     Slider(value: $transcribeInterval, in: 0...30)
                     Text(transcribeInterval.formatted(.number.precision(.fractionLength(1))))
+                        .frame(width: 44, alignment: .trailing)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     InfoButton("Controls how often the transcription will get invoked in streaming mode.")
                 }
             }
@@ -1552,7 +1513,9 @@ struct ContentView: View {
                     HStack {
                         Slider(value: $tokenConfirmationsNeeded, in: 1...10, step: 1)
                         Text(tokenConfirmationsNeeded.formatted(.number))
-                            .frame(width: 30)
+                            .frame(width: 44, alignment: .trailing)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                         InfoButton("Controls the number of consecutive tokens required to agree between decoder loops before considering them as confirmed in the streaming process.")
                     }
                 }
@@ -1820,7 +1783,6 @@ struct ContentView: View {
 
                 await MainActor.run {
                     availableLanguages = Constants.languages.map { $0.key }.sorted()
-                    loadingProgressValue = 1.0
                     sdkCoordinator.modelDownloadFailed = false // Success - clear any previous failure
                 }
             } catch {
@@ -1831,7 +1793,7 @@ struct ContentView: View {
             }
         }
     }
-
+    
     func deleteModel() {
         Task {
             do {
@@ -2118,6 +2080,7 @@ struct ContentView: View {
         currentDecodingLoops += Int(transcription.timings.totalDecodingLoops)
 
         totalInferenceTime += transcription.timings.fullPipeline
+        bufferSeconds = transcription.timings.inputAudioSeconds
         if bufferSeconds > 0 {
             effectiveSpeedFactor = totalInferenceTime / bufferSeconds
             effectiveRealTimeFactor = bufferSeconds / totalInferenceTime
@@ -2361,60 +2324,6 @@ struct ContentView: View {
         }
     }
 
-    private func pollProgressUpdates(progress: Progress) async {
-        var lastFractionCompleted = 0.0
-
-        while !Task.isCancelled {
-            let currentFractionCompleted = progress.fractionCompleted
-
-            // Only update if progress has changed
-            if currentFractionCompleted != lastFractionCompleted {
-                await MainActor.run {
-                    let newProgressValue = Float(currentFractionCompleted) * specializationProgressRatio
-                    loadingProgressValue = newProgressValue
-                }
-                lastFractionCompleted = currentFractionCompleted
-            }
-
-            // Check if download is complete
-            if progress.isFinished || progress.isCancelled {
-                break
-            }
-
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000) // Poll every 100ms
-            } catch {
-                break // Task was cancelled
-            }
-        }
-    }
-
-    private func updateLoadingProgressSmoothly(from startValue: Float, to endValue: Float, over duration: TimeInterval) async {
-        let startTime = Date()
-
-        while true {
-            let elapsedTime = Date().timeIntervalSince(startTime)
-
-            if elapsedTime >= duration {
-                await MainActor.run {
-                    loadingProgressValue = endValue
-                }
-                break
-            }
-
-            let percentage = Float(elapsedTime / duration)
-
-            await MainActor.run {
-                loadingProgressValue = startValue + (endValue - startValue) * percentage
-            }
-
-            do {
-                try await Task.sleep(nanoseconds: 50_000_000) // 20fps
-            } catch {
-                break // Task was cancelled
-            }
-        }
-    }
 }
 
 extension Sequence where Element: Hashable {
@@ -2492,9 +2401,11 @@ extension Color {
         keyProvider: ObfuscatedKeyProvider(mask: 12)
     )
     let deviceDiscoverer = AudioDeviceDiscoverer()
+    let liveActivityManager = LiveActivityManager()
     let streamViewModel = StreamViewModel(
         sdkCoordinator: sdkCoordinator,
-        audioDeviceDiscoverer: deviceDiscoverer
+        audioDeviceDiscoverer: deviceDiscoverer,
+        liveActivityManager: liveActivityManager
     )
     let transcribeViewModel = TranscribeViewModel(
         sdkCoordinator: sdkCoordinator

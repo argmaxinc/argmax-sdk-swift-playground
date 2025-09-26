@@ -4,6 +4,9 @@ import ArgmaxSDK
 import Argmax
 import WhisperKit
 import CoreAudio
+#if os(iOS)
+import ActivityKit
+#endif
 
 /// An `ObservableObject` that manages the state and logic for real-time audio streaming and transcription.
 /// This view model acts as the primary interface between the SwiftUI views and the underlying transcription services.
@@ -43,6 +46,11 @@ class StreamViewModel: ObservableObject {
     @Published var deviceResult: StreamResult?
     @Published var systemResult: StreamResult?
     
+    // Live Activity Management (iOS only)
+    #if os(iOS)
+    let liveActivityManager: LiveActivityManager
+    #endif
+    
     #if os(macOS)
     let audioProcessDiscoverer: AudioProcessDiscoverer
     #endif
@@ -53,6 +61,11 @@ class StreamViewModel: ObservableObject {
     // Throttle guards to avoid overwhelming the UI with high-frequency updates
     private var lastEnergyUpdateAt: TimeInterval = 0
     private var lastHypothesisUpdateAtBySource: [String: TimeInterval] = [:]
+    #if os(iOS)
+    private var lastLiveActivityAudioUpdate: TimeInterval = 0
+    private var lastAudioDataReceived: TimeInterval = 0
+    private var interruptionMonitoringTask: Task<Void, Never>?
+    #endif
     
     // Currently active streaming sources, set only in startTranscribing
     private var curActiveStreamSrcs: [any StreamSourceProtocol] = []
@@ -114,9 +127,10 @@ class StreamViewModel: ObservableObject {
         self.audioDeviceDiscoverer = audioDeviceDiscoverer
     }
     #else
-    init(sdkCoordinator: ArgmaxSDKCoordinator, audioDeviceDiscoverer: AudioDeviceDiscoverer) {
+    init(sdkCoordinator: ArgmaxSDKCoordinator, audioDeviceDiscoverer: AudioDeviceDiscoverer, liveActivityManager: LiveActivityManager) {
         self.sdkCoordinator = sdkCoordinator
         self.audioDeviceDiscoverer = audioDeviceDiscoverer
+        self.liveActivityManager = liveActivityManager
     }
     #endif
     
@@ -194,6 +208,16 @@ class StreamViewModel: ObservableObject {
             }
         }
         
+        // Start live activity for stream mode (iOS only)
+        #if os(iOS)
+        do {
+            try await liveActivityManager.startActivity()
+            await startInterruptionMonitoring()
+        } catch {
+            Logging.error("Failed to start live activity: \(error)")
+        }
+        #endif
+        
         // Start all streams concurrently
         for src in activeStreamSrc {
             let task = Task.detached {
@@ -260,6 +284,12 @@ class StreamViewModel: ObservableObject {
                 self.curActiveStreamSrcs.removeAll()
             }
             
+            // Stop live activity (iOS only)
+            #if os(iOS)
+            await self.liveActivityManager.stopActivity()
+            await self.stopInterruptionMonitoring()
+            #endif
+            
             Logging.debug("Stopped all transcription streams")
         }
     }
@@ -269,7 +299,7 @@ class StreamViewModel: ObservableObject {
     private func isDeviceSource(_ sourceId: String) -> Bool {
         return sourceId.starts(with: "device")
     }
-
+    
     @MainActor
     private func updateStreamResult(sourceId: String, updateBlock: (StreamResult) -> StreamResult) {
         if isDeviceSource(sourceId) {
@@ -284,7 +314,7 @@ class StreamViewModel: ObservableObject {
     @MainActor
     private func handleResult(_ result: LiveResult, for sourceId: String) {
         switch result {
-        case .hypothesis(let text, _):
+        case .hypothesis(let text, _, _):
             let now = Date().timeIntervalSince1970
             let last = lastHypothesisUpdateAtBySource[sourceId] ?? 0
             // Update at most 10 times per second per source
@@ -297,6 +327,17 @@ class StreamViewModel: ObservableObject {
                 newResult.hypothesisText = trimmed
                 return newResult
             }
+            
+            // Update live activity with new hypothesis
+            #if os(iOS)
+            Task {
+                await liveActivityManager.updateContentState { oldState in
+                    var state = oldState
+                    state.currentHypothesis = trimmed
+                    return state
+                }
+            }
+            #endif
             
         case .confirm(let text, let seconds, let transcriptionResult):
             updateStreamResult(sourceId: sourceId) { oldResult in
@@ -320,6 +361,11 @@ class StreamViewModel: ObservableObject {
 
     @MainActor
     private func updateAudioMetrics(for source: ArgmaxSource, audioData: [Float]) {
+        #if os(iOS)
+        // Update last audio data received timestamp
+        lastAudioDataReceived = Date().timeIntervalSince1970
+        #endif
+        
         if case .device = source.streamType, let whisperKitPro = self.sdkCoordinator.whisperKit {
             let now = Date().timeIntervalSince1970
             guard now - lastEnergyUpdateAt >= 0.1 else { return }
@@ -333,15 +379,77 @@ class StreamViewModel: ObservableObject {
             let newBufferEnergy = energies
             #endif
             let sampleCount = whisperKitPro.audioProcessor.audioSamples.count
+            let audioSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
 
             updateStreamResult(sourceId: source.id) { oldResult in
                 var newResult = oldResult
                 newResult.bufferEnergy = newBufferEnergy
-                newResult.bufferSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
+                newResult.bufferSeconds = audioSeconds
                 return newResult
+            }
+            
+            #if os(iOS)
+            // Update live activity with audio seconds (throttled to once per second)
+            if liveActivityManager.isActivityRunning && now - lastLiveActivityAudioUpdate >= 1 {
+                lastLiveActivityAudioUpdate = now
+                
+                Task {
+                    await liveActivityManager.updateContentState { oldState in
+                        var state = oldState
+                        state.audioSeconds = audioSeconds
+                        state.isInterrupted = false
+                        return state
+                    }
+                }
+            }
+            #endif
+        }
+    }
+    
+    #if os(iOS)
+    /// Starts monitoring for audio interruptions using a background task
+    @MainActor
+    private func startInterruptionMonitoring() {
+        lastAudioDataReceived = Date().timeIntervalSince1970
+        
+        interruptionMonitoringTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                await self?.checkForInterruption()
+                // Check every 200ms, data should keep following for every 100ms
+                try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
     }
+    
+    /// Stops the interruption monitoring task
+    @MainActor
+    private func stopInterruptionMonitoring() {
+        interruptionMonitoringTask?.cancel()
+        interruptionMonitoringTask = nil
+    }
+    
+    /// Checks if audio has been interrupted and updates live activity accordingly
+    private func checkForInterruption() async {
+        await MainActor.run {
+            guard liveActivityManager.isActivityRunning else { return }
+            
+            let now = Date().timeIntervalSince1970
+            let timeSinceLastAudio = now - lastAudioDataReceived
+            let isInterrupted = timeSinceLastAudio > 0.5
+            
+            if isInterrupted {
+                Task {
+                    await liveActivityManager.updateContentState { oldState in
+                        var state = oldState
+                        state.isInterrupted = true
+                        return state
+                    }
+                }
+                stopInterruptionMonitoring()
+            }
+        }
+    }
+    #endif
 }
 
 enum StreamingError: Error, LocalizedError {

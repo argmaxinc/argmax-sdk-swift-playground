@@ -28,8 +28,11 @@ struct TranscribeResultView: View {
     
     let loadModel: (String, Bool) -> Void
     
+    // Static constant to avoid recomputing on every view render
+    private static let defaultModel = WhisperKit.recommendedModels().default
+    
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
-    @AppStorage("selectedModel") private var selectedModel: String = WhisperKit.recommendedModels().default
+    @AppStorage("selectedModel") private var selectedModel: String = TranscribeResultView.defaultModel
     @AppStorage("enableDecoderPreview") private var enableDecoderPreview: Bool = true
     
     @EnvironmentObject private var sdkCoordinator: ArgmaxSDKCoordinator

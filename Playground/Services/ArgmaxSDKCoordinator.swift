@@ -53,6 +53,8 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
     @Published public private(set) var whisperKitModelState: ModelState = .unloaded
     @Published public private(set) var speakerKitModelState: ModelState = .unloaded
     @Published public var modelDownloadFailed: Bool = false
+    @Published public var availableModelNames: [String] = []
+    @Published public private(set) var whisperKitModelProgress: Float = 0.0
     
     // MARK: - Argmax API objects
     public private(set) var whisperKit: WhisperKitPro? {
@@ -74,6 +76,10 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
     private var apiKey: String? = nil
     private var cancellables = Set<AnyCancellable>()
     
+    // MARK: - Progress tracking properties
+    private let specializationProgressRatio: Float = 0.7
+    private var progressAnimationTask: Task<Void, Never>?
+    
     public init(
         whisperKitConfig: WhisperKitProConfig = WhisperKitProConfig(),
         keyProvider: APIKeyProvider
@@ -92,6 +98,9 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+        
+        // Setup progress tracking observers
+        setupProgressTracking()
     }
     
     /// Sets up the Argmax SDK with proper configuration and error handling
@@ -137,6 +146,11 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
         }
         
         await modelStore.updateAvailableModels(from: targetRepositories, keyProvider: keyProvider)
+        
+        await MainActor.run {
+            availableModelNames = modelStore.availableModels.flatMap(\.models).map(\.description)
+        }
+
     }
 
     /// Downloads the CoreML bundle (if needed) and instantiates both WhisperKit and SpeakerKit.
@@ -325,5 +339,104 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
             }
         }
         return speakerKit
+    }
+    
+    // MARK: - Progress tracking methods
+    
+    /// Sets up observers for model state and progress changes to update whisperKitModelProgress
+    ///
+    /// ## Progress Calculation
+    ///
+    /// The `whisperKitModelProgress` represents the overall model loading progress from 0.0 to 1.0:
+    /// - **Unloaded/Unloading:** 0.0
+    /// - **Downloading:** `modelStore.progress.fractionCompleted * 0.7` (download contributes 70% of total progress)
+    /// - **Downloaded:** 0.7 (download complete, specialization pending)
+    /// - **Prewarming:** Animated smoothly from 0.7 to 0.91 over 60 seconds, or shorter if prewarming finishes ealier
+    /// - **Prewarmed/Loading:** 0.91 (specialization complete, final loading steps)
+    /// - **Loaded:** 1.0 (fully ready for transcription)
+    private func setupProgressTracking() {
+        // Observe whisperKitModelState changes
+        $whisperKitModelState
+            .sink { [weak self] newState in
+                self?.updateProgressForModelState(newState)
+            }
+            .store(in: &cancellables)
+        
+        // Observe modelStore.progress changes
+        modelStore.$progress
+            .sink { [weak self] newProgress in
+                self?.updateProgressForDownload(newProgress)
+            }
+            .store(in: &cancellables)
+    }
+    
+    /// Updates whisperKitModelProgress based on model state changes
+    private func updateProgressForModelState(_ newState: ModelState) {
+        progressAnimationTask?.cancel()
+        switch newState {
+        case .unloaded:
+            whisperKitModelProgress = 0.0
+        case .downloading:
+            // Progress will be handled by download progress polling
+            if whisperKitModelProgress == 0.0 {
+                whisperKitModelProgress = 0.0
+            }
+        case .downloaded:
+            whisperKitModelProgress = specializationProgressRatio
+        case .prewarming, .loading:
+            let startProgress = specializationProgressRatio
+            let targetProgress = specializationProgressRatio + (1.0 - specializationProgressRatio) * 0.9
+            progressAnimationTask = Task { [weak self] in
+                await self?.updateProgressSmoothly(from: startProgress, to: targetProgress, over: 60)
+            }
+        case .prewarmed:
+            whisperKitModelProgress = specializationProgressRatio + (1.0 - specializationProgressRatio) * 0.9
+        case .loaded:
+            whisperKitModelProgress = 1.0
+        case .unloading:
+            whisperKitModelProgress = 0.0
+        @unknown default:
+            break
+        }
+    }
+    
+    /// Updates whisperKitModelProgress based on download progress changes
+    private func updateProgressForDownload(_ newProgress: Progress?) {
+        if let progress = newProgress, whisperKitModelState == .downloading {
+            // Directly update progress from the Progress object
+            let newProgressValue = Float(progress.fractionCompleted) * specializationProgressRatio
+            whisperKitModelProgress = newProgressValue
+        } else if newProgress == nil && whisperKitModelState == .downloading {
+            // Download completed, progress will be handled by modelState change
+            whisperKitModelProgress = specializationProgressRatio
+        }
+    }
+    
+    /// Smoothly animates progress from one value to another over a specified duration
+    private func updateProgressSmoothly(from startValue: Float, to endValue: Float, over duration: TimeInterval) async {
+        let startTime = Date()
+        
+        while true {
+            let elapsedTime = Date().timeIntervalSince(startTime)
+            
+            if elapsedTime >= duration {
+                await MainActor.run { [weak self] in
+                    self?.whisperKitModelProgress = endValue
+                }
+                break
+            }
+            
+            let percentage = Float(elapsedTime / duration)
+            
+            await MainActor.run { [weak self] in
+                self?.whisperKitModelProgress = startValue + (endValue - startValue) * percentage
+            }
+            
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000) // 20fps
+            } catch {
+                break // Task was cancelled
+            }
+        }
     }
 }

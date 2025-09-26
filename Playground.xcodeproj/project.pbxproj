@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 60;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -16,6 +16,11 @@
 		74312CDC2E1D02E3000D994A /* MacAudioDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74312CDB2E1D02E3000D994A /* MacAudioDevicesView.swift */; };
 		74312CDE2E1DA46C000D994A /* StreamResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74312CDD2E1DA46C000D994A /* StreamResultView.swift */; };
 		74359A2D2E28261A008C31EF /* VoiceEnergyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74359A2C2E28261A008C31EF /* VoiceEnergyView.swift */; };
+		7435D4382E4E8673008167D7 /* Argmax in Frameworks */ = {isa = PBXBuildFile; productRef = 7435D4372E4E8673008167D7 /* Argmax */; };
+		7446C90B2E4D522B00290EAB /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446C9052E4D522B00290EAB /* LiveActivityManager.swift */; };
+		7446C9152E4D536400290EAB /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7446C9142E4D536400290EAB /* WidgetKit.framework */; };
+		7446C9172E4D536400290EAB /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7446C9162E4D536400290EAB /* SwiftUI.framework */; };
+		7446C9242E4D536500290EAB /* TranscriptionLiveActivityExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7446C9122E4D536400290EAB /* TranscriptionLiveActivityExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7469F1FA2E3AC3D00090AEBA /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 7469F1F92E3AC3D00090AEBA /* README.md */; };
 		746E4C062E39874F009623D7 /* DefaultEnvInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746E4C042E39874F009623D7 /* DefaultEnvInitializer.swift */; };
 		746E4C0A2E398757009623D7 /* PlaygroundEnvInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746E4C082E398757009623D7 /* PlaygroundEnvInitializer.swift */; };
@@ -23,7 +28,6 @@
 		747E67062E3008000061E778 /* TranscribeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 747E67052E3008000061E778 /* TranscribeViewModel.swift */; };
 		747E67082E300F780061E778 /* TranscribeResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 747E67072E300F780061E778 /* TranscribeResultView.swift */; };
 		748BA5502E1B2EC6008DA1B8 /* StreamViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748BA54F2E1B2EC6008DA1B8 /* StreamViewModel.swift */; };
-		74CE73D72E3C40D900919F36 /* Argmax in Frameworks */ = {isa = PBXBuildFile; productRef = 74CE73D62E3C40D900919F36 /* Argmax */; };
 		74F3B7BC2E1C7C8B00C544D1 /* ToastMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F3B7BB2E1C7C8B00C544D1 /* ToastMessage.swift */; };
 		74F3B7BE2E1CF44F00C544D1 /* AudioProcessDiscoverer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F3B7BD2E1CF44F00C544D1 /* AudioProcessDiscoverer.swift */; };
 		74F3B7C12E1CF4F400C544D1 /* AudioProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F3B7C02E1CF4F400C544D1 /* AudioProcess.swift */; };
@@ -31,6 +35,16 @@
 		74F860962E2B19060007163C /* CoreAudioUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F860952E2B19060007163C /* CoreAudioUtils.swift */; };
 		74F897792E4F9B130045252E /* TranscriptionModeSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F897782E4F9B130045252E /* TranscriptionModeSelection.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		7446C9222E4D536500290EAB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 167B34562B05431E0076F261 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7446C9112E4D536400290EAB;
+			remoteInfo = TranscriptionLiveActivityExtension;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		1621BFDF2B74BF6E007FA014 /* Embed Watch Content */ = {
@@ -53,6 +67,17 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7446C9292E4D536500290EAB /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				7446C9242E4D536500290EAB /* TranscriptionLiveActivityExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -68,6 +93,11 @@
 		74312CDB2E1D02E3000D994A /* MacAudioDevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAudioDevicesView.swift; sourceTree = "<group>"; };
 		74312CDD2E1DA46C000D994A /* StreamResultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamResultView.swift; sourceTree = "<group>"; };
 		74359A2C2E28261A008C31EF /* VoiceEnergyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEnergyView.swift; sourceTree = "<group>"; };
+		743C1DE72E4BBB75000482CC /* TranscriptionModeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionModeSelection.swift; sourceTree = "<group>"; };
+		7446C9052E4D522B00290EAB /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
+		7446C9122E4D536400290EAB /* TranscriptionLiveActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TranscriptionLiveActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		7446C9142E4D536400290EAB /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		7446C9162E4D536400290EAB /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		7469F1F92E3AC3D00090AEBA /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		746E4C042E39874F009623D7 /* DefaultEnvInitializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultEnvInitializer.swift; sourceTree = "<group>"; };
 		746E4C082E398757009623D7 /* PlaygroundEnvInitializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundEnvInitializer.swift; sourceTree = "<group>"; };
@@ -83,12 +113,42 @@
 		74F897782E4F9B130045252E /* TranscriptionModeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionModeSelection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7446C9252E4D536500290EAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 7446C9112E4D536400290EAB /* TranscriptionLiveActivityExtension */;
+		};
+		7446C92D2E4D553500290EAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				TranscriptionAttributes.swift,
+			);
+			target = 167B345D2B05431E0076F261 /* Playground */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		7446C9182E4D536400290EAB /* TranscriptionLiveActivity */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7446C92D2E4D553500290EAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7446C9252E4D536500290EAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = TranscriptionLiveActivity; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		167B345B2B05431E0076F261 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				74CE73D72E3C40D900919F36 /* Argmax in Frameworks */,
+				7435D4382E4E8673008167D7 /* Argmax in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7446C90F2E4D536400290EAB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7446C9172E4D536400290EAB /* SwiftUI.framework in Frameworks */,
+				7446C9152E4D536400290EAB /* WidgetKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -104,6 +164,7 @@
 				74C12F122E2EB54A00C772C3 /* Utils */,
 				740F6DA22E2DB05E00429FE9 /* Services */,
 				74F3B7BF2E1CF4E300C544D1 /* Audio */,
+				7446C9182E4D536400290EAB /* TranscriptionLiveActivity */,
 				1677AFAB2B57618A008C61C0 /* Playground.swift */,
 				1626683A2BB90CC9008F950A /* Info.plist */,
 				1677AFD72B576375008C61C0 /* Resources */,
@@ -139,6 +200,7 @@
 				74312CDB2E1D02E3000D994A /* MacAudioDevicesView.swift */,
 				74359A2C2E28261A008C31EF /* VoiceEnergyView.swift */,
 				747E67072E300F780061E778 /* TranscribeResultView.swift */,
+				743C1DE72E4BBB75000482CC /* TranscriptionModeSelection.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -148,6 +210,7 @@
 			children = (
 				7469F1F92E3AC3D00090AEBA /* README.md */,
 				1677AFA82B57618A008C61C0 /* Playground */,
+				7446C9132E4D536400290EAB /* Frameworks */,
 				167B345F2B05431E0076F261 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -156,6 +219,7 @@
 			isa = PBXGroup;
 			children = (
 				167B345E2B05431E0076F261 /* Playground.app */,
+				7446C9122E4D536400290EAB /* TranscriptionLiveActivityExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -164,8 +228,18 @@
 			isa = PBXGroup;
 			children = (
 				740F6DA32E2DB07400429FE9 /* ArgmaxSDKCoordinator.swift */,
+				7446C9052E4D522B00290EAB /* LiveActivityManager.swift */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		7446C9132E4D536400290EAB /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7446C9142E4D536400290EAB /* WidgetKit.framework */,
+				7446C9162E4D536400290EAB /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		746E4C052E39874F009623D7 /* Environment */ = {
@@ -218,18 +292,42 @@
 				167B345C2B05431E0076F261 /* Resources */,
 				1621BFDF2B74BF6E007FA014 /* Embed Watch Content */,
 				168D3C722C9D57EE00C688E2 /* Embed Frameworks */,
+				7446C9292E4D536500290EAB /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7446C9232E4D536500290EAB /* PBXTargetDependency */,
+			);
+			name = Playground;
+			packageProductDependencies = (
+				7435D4372E4E8673008167D7 /* Argmax */,
+			);
+			productName = BasicExample;
+			productReference = 167B345E2B05431E0076F261 /* Playground.app */;
+			productType = "com.apple.product-type.application";
+		};
+		7446C9112E4D536400290EAB /* TranscriptionLiveActivityExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7446C9262E4D536500290EAB /* Build configuration list for PBXNativeTarget "TranscriptionLiveActivityExtension" */;
+			buildPhases = (
+				7446C90E2E4D536400290EAB /* Sources */,
+				7446C90F2E4D536400290EAB /* Frameworks */,
+				7446C9102E4D536400290EAB /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = Playground;
-			packageProductDependencies = (
-				74CE73D62E3C40D900919F36 /* Argmax */,
+			fileSystemSynchronizedGroups = (
+				7446C9182E4D536400290EAB /* TranscriptionLiveActivity */,
 			);
-			productName = BasicExample;
-			productReference = 167B345E2B05431E0076F261 /* Playground.app */;
-			productType = "com.apple.product-type.application";
+			name = TranscriptionLiveActivityExtension;
+			packageProductDependencies = (
+			);
+			productName = TranscriptionLiveActivityExtension;
+			productReference = 7446C9122E4D536400290EAB /* TranscriptionLiveActivityExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -238,11 +336,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1520;
+				LastSwiftUpdateCheck = 1630;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
 					167B345D2B05431E0076F261 = {
 						CreatedOnToolsVersion = 15.0.1;
+					};
+					7446C9112E4D536400290EAB = {
+						CreatedOnToolsVersion = 16.3;
 					};
 				};
 			};
@@ -256,13 +357,14 @@
 			);
 			mainGroup = 167B34552B05431E0076F261;
 			packageReferences = (
-				74CE73D52E3C40D900919F36 /* XCRemoteSwiftPackageReference "argmax-sdk-swift" */,
+				7435D4362E4E8673008167D7 /* XCRemoteSwiftPackageReference "argmax-sdk-swift-alpha" */,
 			);
 			productRefGroup = 167B345F2B05431E0076F261 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				167B345D2B05431E0076F261 /* Playground */,
+				7446C9112E4D536400290EAB /* TranscriptionLiveActivityExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -275,6 +377,13 @@
 				1677AFC42B57618A008C61C0 /* Preview Assets.xcassets in Resources */,
 				7469F1FA2E3AC3D00090AEBA /* README.md in Resources */,
 				1677AFE12B57678E008C61C0 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7446C9102E4D536400290EAB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -294,6 +403,7 @@
 				740F6DA12E2CD3ED00429FE9 /* AudioDeviceDiscoverer.swift in Sources */,
 				746E4C062E39874F009623D7 /* DefaultEnvInitializer.swift in Sources */,
 				1677AFC22B57618A008C61C0 /* Playground.swift in Sources */,
+				7446C90B2E4D522B00290EAB /* LiveActivityManager.swift in Sources */,
 				748BA5502E1B2EC6008DA1B8 /* StreamViewModel.swift in Sources */,
 				74F897792E4F9B130045252E /* TranscriptionModeSelection.swift in Sources */,
 				746E4C0A2E398757009623D7 /* PlaygroundEnvInitializer.swift in Sources */,
@@ -307,7 +417,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7446C90E2E4D536400290EAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7446C9232E4D536500290EAB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 7446C9112E4D536400290EAB /* TranscriptionLiveActivityExtension */;
+			targetProxy = 7446C9222E4D536500290EAB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		167B34832B05431F0076F261 /* Debug */ = {
@@ -533,6 +659,67 @@
 			};
 			name = Release;
 		};
+		7446C9272E4D536500290EAB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Playground/TranscriptionLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TranscriptionLiveActivity;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.argmaxinc.example.Playground${DEVELOPMENT_TEAM}.TranscriptionLiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7446C9282E4D536500290EAB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Playground/TranscriptionLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TranscriptionLiveActivity;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.argmaxinc.example.Playground${DEVELOPMENT_TEAM}.TranscriptionLiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -554,23 +741,32 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		7446C9262E4D536500290EAB /* Build configuration list for PBXNativeTarget "TranscriptionLiveActivityExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7446C9272E4D536500290EAB /* Debug */,
+				7446C9282E4D536500290EAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		74CE73D52E3C40D900919F36 /* XCRemoteSwiftPackageReference "argmax-sdk-swift" */ = {
+		7435D4362E4E8673008167D7 /* XCRemoteSwiftPackageReference "argmax-sdk-swift-alpha" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "argmaxinc.argmax-sdk-swift";
+			repositoryURL = "argmaxinc.argmax-sdk-swift-alpha";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.7.2;
+				minimumVersion = 1.7.11;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		74CE73D62E3C40D900919F36 /* Argmax */ = {
+		7435D4372E4E8673008167D7 /* Argmax */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 74CE73D52E3C40D900919F36 /* XCRemoteSwiftPackageReference "argmax-sdk-swift" */;
+			package = 7435D4362E4E8673008167D7 /* XCRemoteSwiftPackageReference "argmax-sdk-swift-alpha" */;
 			productName = Argmax;
 		};
 /* End XCSwiftPackageProductDependency section */

@@ -141,9 +141,11 @@ struct StreamResultView: View {
         keyProvider: ObfuscatedKeyProvider(mask: 12)
     )
     let deviceDiscoverer = AudioDeviceDiscoverer()
+    let liveActivityManager = LiveActivityManager()
     let streamViewModel = StreamViewModel(
         sdkCoordinator: sdkCoordinator,
-        audioDeviceDiscoverer: deviceDiscoverer
+        audioDeviceDiscoverer: deviceDiscoverer,
+        liveActivityManager: liveActivityManager
     )
     #endif
 
