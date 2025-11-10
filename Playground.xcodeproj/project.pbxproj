@@ -11,6 +11,8 @@
 		1677AFC42B57618A008C61C0 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1677AFAE2B57618A008C61C0 /* Preview Assets.xcassets */; };
 		1677AFE12B57678E008C61C0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1677AFE02B57678E008C61C0 /* Assets.xcassets */; };
 		1677AFE62B57704E008C61C0 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1677AFE52B57704E008C61C0 /* ContentView.swift */; };
+		5539A56B2EA719360020D5CE /* CustomVocabularySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5539A56A2EA719360020D5CE /* CustomVocabularySheet.swift */; };
+		5539A56D2EA71B2A0020D5CE /* HighlightedTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5539A56C2EA71B2A0020D5CE /* HighlightedTextView.swift */; };
 		740F6DA12E2CD3ED00429FE9 /* AudioDeviceDiscoverer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740F6DA02E2CD3ED00429FE9 /* AudioDeviceDiscoverer.swift */; };
 		740F6DA42E2DB07400429FE9 /* ArgmaxSDKCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740F6DA32E2DB07400429FE9 /* ArgmaxSDKCoordinator.swift */; };
 		74312CDC2E1D02E3000D994A /* MacAudioDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74312CDB2E1D02E3000D994A /* MacAudioDevicesView.swift */; };
@@ -88,6 +90,8 @@
 		1677AFE02B57678E008C61C0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1677AFE52B57704E008C61C0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		167B345E2B05431E0076F261 /* Playground.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Playground.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5539A56A2EA719360020D5CE /* CustomVocabularySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomVocabularySheet.swift; sourceTree = "<group>"; };
+		5539A56C2EA71B2A0020D5CE /* HighlightedTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightedTextView.swift; sourceTree = "<group>"; };
 		740F6DA02E2CD3ED00429FE9 /* AudioDeviceDiscoverer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceDiscoverer.swift; sourceTree = "<group>"; };
 		740F6DA32E2DB07400429FE9 /* ArgmaxSDKCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArgmaxSDKCoordinator.swift; sourceTree = "<group>"; };
 		74312CDB2E1D02E3000D994A /* MacAudioDevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAudioDevicesView.swift; sourceTree = "<group>"; };
@@ -193,6 +197,8 @@
 		1677AFE42B5769E5008C61C0 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				5539A56C2EA71B2A0020D5CE /* HighlightedTextView.swift */,
+				5539A56A2EA719360020D5CE /* CustomVocabularySheet.swift */,
 				74F897782E4F9B130045252E /* TranscriptionModeSelection.swift */,
 				74312CDD2E1DA46C000D994A /* StreamResultView.swift */,
 				1677AFE52B57704E008C61C0 /* ContentView.swift */,
@@ -394,6 +400,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5539A56D2EA71B2A0020D5CE /* HighlightedTextView.swift in Sources */,
 				747E67082E300F780061E778 /* TranscribeResultView.swift in Sources */,
 				74312CDC2E1D02E3000D994A /* MacAudioDevicesView.swift in Sources */,
 				74F3B7BE2E1CF44F00C544D1 /* AudioProcessDiscoverer.swift in Sources */,
@@ -413,6 +420,7 @@
 				74F860962E2B19060007163C /* CoreAudioUtils.swift in Sources */,
 				747E67062E3008000061E778 /* TranscribeViewModel.swift in Sources */,
 				74F860942E29A9D20007163C /* ProcessTapper.swift in Sources */,
+				5539A56B2EA719360020D5CE /* CustomVocabularySheet.swift in Sources */,
 				740F6DA42E2DB07400429FE9 /* ArgmaxSDKCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -757,8 +765,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "argmaxinc.argmax-sdk-swift-alpha";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.7.11;
+				kind = exactVersion;
+				version = 1.9.4;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

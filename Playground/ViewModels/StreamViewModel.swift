@@ -42,6 +42,11 @@ import ActivityKit
 /// - **`AudioProcessDiscoverer` / `AudioDeviceDiscoverer`:** (macOS only) These are used to determine which
 ///   audio sources are available for streaming.
 class StreamViewModel: ObservableObject {
+    #if os(macOS)
+    private let energyHistoryLimit = 512
+    #else
+    private let energyHistoryLimit = 256
+    #endif
     // Stream Results - per-stream data for UI
     @Published var deviceResult: StreamResult?
     @Published var systemResult: StreamResult?
@@ -373,11 +378,7 @@ class StreamViewModel: ObservableObject {
 
             // Limit the amount of energy samples passed to the UI for performance
             let energies = whisperKitPro.audioProcessor.relativeEnergy
-            #if os(iOS)
-            let newBufferEnergy = Array(energies.suffix(256))
-            #else
-            let newBufferEnergy = energies
-            #endif
+            let newBufferEnergy = Array(energies.suffix(self.energyHistoryLimit))
             let sampleCount = whisperKitPro.audioProcessor.audioSamples.count
             let audioSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
 

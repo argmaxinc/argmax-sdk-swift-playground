@@ -16,6 +16,16 @@ struct StreamResultLine: View {
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
 
     let result: StreamViewModel.StreamResult
+    
+    private func createHighlightedAttributedString(text: String, isBold: Bool, color: Color, customVocabularyResults: [WordTiming: [WordTiming]] = [:]) -> AttributedString {
+        let baseFont: Font = isBold ? .headline.bold() : .headline
+        return HighlightedTextView.createHighlightedAttributedString(
+            text: text,
+            customVocabularyResults: result.transcribeResult?.customVocabularyResults ?? [:],
+            font: baseFont,
+            foregroundColor: color
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -35,18 +45,22 @@ struct StreamResultLine: View {
                 ScrollView {
                     (
                         (enableTimestamps ?
-                            Text(result.streamTimestampText)
-                                .font(.caption)
-                                .foregroundColor(.secondary) :
+                         Text(result.streamTimestampText)
+                            .font(.caption)
+                            .foregroundColor(.secondary) :
                             Text("")
                         ) +
-                        Text(result.confirmedText)
-                            .font(.headline)
-                            .fontWeight(.bold) +
+                        Text(createHighlightedAttributedString(
+                            text: result.confirmedText,
+                            isBold: true,
+                            color: .primary
+                        )) +
                         Text(result.confirmedText.isEmpty || result.hypothesisText.isEmpty ? "" : " ") +
-                        Text(result.hypothesisText)
-                            .font(.headline)
-                            .foregroundColor(.gray)
+                        Text(createHighlightedAttributedString(
+                            text: result.hypothesisText,
+                            isBold: false,
+                            color: .gray
+                        ))
                     )
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,7 +121,7 @@ struct StreamResultView: View {
     @EnvironmentObject var streamViewModel: StreamViewModel
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
     @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let device = streamViewModel.deviceResult {
