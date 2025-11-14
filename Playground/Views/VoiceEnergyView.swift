@@ -29,43 +29,43 @@ struct VoiceEnergyView: View {
     
     /// Data structure for Chart energy values
     private struct EnergyData: Identifiable {
-        let id = UUID()
-        let index: Int
+        let id: Int
         let value: Float
-        let originalEnergy: Float
     }
     
     /// Prepare chart data from all energy samples
     private var chartData: [EnergyData] {
-        return bufferEnergy.enumerated().map { index, energy in
+        bufferEnergy.enumerated().map { index, energy in
             let clampedEnergy = min(max(energy, 0), 1)
-            return EnergyData(
-                index: index,
-                value: clampedEnergy, // Keep original 0-1 range for bottom-up bars
-                originalEnergy: clampedEnergy
-            )
+            return EnergyData(id: index, value: clampedEnergy)
         }
     }
     
     var body: some View {
-        if !bufferEnergy.isEmpty {
+        let energyChartData = chartData
+        return Group {
+            if energyChartData.isEmpty {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 24)
+            } else {
             #if os(macOS)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    Chart(chartData) { energyData in
+                    Chart(energyChartData) { energyData in
                         BarMark(
-                            x: .value("Index", energyData.index),
+                            x: .value("Index", energyData.id),
                             y: .value("Energy", energyData.value),
                             width: 2
                         )
                         .cornerRadius(1)
-                        .foregroundStyle(energyData.originalEnergy > Float(silenceThreshold) ? .green : .red)
+                        .foregroundStyle(energyData.value > Float(silenceThreshold) ? .green : .red)
                     }
                     .chartXAxis(.hidden)
                     .chartYAxis(.hidden)
                     .chartYScale(domain: 0...1)
-                    .chartXScale(domain: 0...max(1, chartData.count - 1))
-                    .frame(width: CGFloat(chartData.count * 3), height: 24) // Exact width: 3px per bar (2px + 1px spacing)
+                    .chartXScale(domain: 0...max(1, energyChartData.count - 1))
+                    .frame(width: CGFloat(energyChartData.count * 3), height: 24)
                     .clipped()
                     .id("chart")
                 }
@@ -83,30 +83,27 @@ struct VoiceEnergyView: View {
             }
             #else
             ScrollView(.horizontal) {
-                Chart(chartData) { energyData in
+                Chart(energyChartData) { energyData in
                     BarMark(
-                        x: .value("Index", energyData.index),
+                        x: .value("Index", energyData.id),
                         y: .value("Energy", energyData.value),
                         width: 2
                     )
                     .cornerRadius(1)
-                    .foregroundStyle(energyData.originalEnergy > Float(silenceThreshold) ? .green : .red)
+                    .foregroundStyle(energyData.value > Float(silenceThreshold) ? .green : .red)
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartYScale(domain: 0...1)
-                .chartXScale(domain: 0...max(1, chartData.count - 1))
-                .frame(width: CGFloat(chartData.count * 3), height: 24) // Exact width: 3px per bar (2px + 1px spacing)
+                .chartXScale(domain: 0...max(1, energyChartData.count - 1))
+                .frame(width: CGFloat(energyChartData.count * 3), height: 24)
                 .clipped()
             }
             .defaultScrollAnchor(.trailing)
             .frame(height: 24)
             .scrollIndicators(.never)
             #endif
-        } else {
-            Rectangle()
-                .fill(Color.clear)
-                .frame(height: 24)
+        }
         }
     }
 }

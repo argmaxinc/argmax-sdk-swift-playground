@@ -159,7 +159,8 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
     public func prepare(modelName: String,
                         repository: String? = nil,
                         config: WhisperKitProConfig,
-                        redownload: Bool = false) async throws {
+                        redownload: Bool = false,
+                        clustererVersion: ClustererVersion) async throws {
         guard let apiKey = apiKey, !apiKey.isEmpty else {
             self.whisperKitModelState = .unloaded
             self.speakerKitModelState = .unloaded
@@ -197,7 +198,7 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
             self.whisperKit = whisperKitPro
             
             // --- Then prepare SpeakerKit
-            let speakerKitPro = try await initializeSpeakerKitPro()
+            let speakerKitPro = try await initializeSpeakerKitPro(clustererVersion: clustererVersion)
             self.speakerKit = speakerKitPro
             self.speakerKitModelState = speakerKitPro.modelState
             
@@ -207,6 +208,20 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
             self.whisperKit = nil
             self.speakerKit = nil
             Logging.debug("Failed to prepare models:", error)
+            throw error
+        }
+    }
+    
+    @MainActor
+    public func updateCustomVocabulary(words: [String]) throws {
+        guard let whisperKit else {
+            throw ArgmaxError.modelUnavailable("WhisperKit model is not loaded")
+        }
+
+        do {
+            try whisperKit.setCustomVocabulary(words)
+        } catch {
+            Logging.error("Failed to update custom vocabulary: \(error)")
             throw error
         }
     }
@@ -224,6 +239,12 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
             try await modelStore.deleteModel(variant: modelName, from: selectedRepository)
         } catch {
             throw ArgmaxError.generic("Failed to delete model")
+        }
+    }
+    
+    public func deleteCustomVocabularyModels() async throws {
+        for model in ["canary-1b-v2", "parakeet-tdt_ctc-110m"] {
+            try await modelStore.deleteModel(variant: model, from: "argmaxinc/ctckit-pro")
         }
     }
 
@@ -322,8 +343,8 @@ public final class ArgmaxSDKCoordinator: ObservableObject {
     }
 
     /// Initializes and loads SpeakerKitPro
-    private func initializeSpeakerKitPro() async throws -> SpeakerKitPro {
-        var config = SpeakerKitProConfig(load: true)
+    private func initializeSpeakerKitPro(clustererVersion: ClustererVersion) async throws -> SpeakerKitPro {
+        var config = SpeakerKitProConfig(load: true, clustererVersion: clustererVersion)
         let connected = await ArgmaxSDK.isConnected()
         if !connected {
             config.download = false

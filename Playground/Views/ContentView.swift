@@ -92,6 +92,33 @@ struct ContentView: View {
     #endif
     @AppStorage("trackingPermissionStatePro") private var trackingPermissionStateRawValue: Int = TrackingPermissionState.undetermined.rawValue
     
+    // MARK: DiarizationOptions
+    @AppStorage("minNumOfSpeakers") private var storedMinNumOfSpeakers: Int = -1
+    @AppStorage("minActiveOffset") private var storedMinActiveOffset: Double = -1.0
+    @AppStorage("speakerInfoStrategyRaw") private var speakerInfoStrategyRaw: String = "segment"
+    @AppStorage("clustererVersionRaw") private var clustererVersionRaw: String = ClustererVersion.pyannote4.description
+    @AppStorage("useExclusiveReconciliation") private var useExclusiveReconciliation: Bool = true
+    
+    private var minNumOfSpeakers: Int? {
+        get { storedMinNumOfSpeakers == -1 ? nil : storedMinNumOfSpeakers }
+        set { storedMinNumOfSpeakers = newValue ?? -1 }
+    }
+
+    private var minActiveOffset: Double? {
+        get { storedMinActiveOffset == -1.0 ? nil : storedMinActiveOffset }
+        set { storedMinActiveOffset = newValue ?? -1.0 }
+    }
+
+    private var speakerInfoStrategy: SpeakerInfoStrategy {
+        get { SpeakerInfoStrategy(from: speakerInfoStrategyRaw) ?? .segment }
+        set { speakerInfoStrategyRaw = newValue == .word ? "word" : "segment" }
+    }
+
+    private var clustererVersion: ClustererVersion {
+        get { ClustererVersion(stringValue: clustererVersionRaw) ?? .pyannote4 }
+        set { clustererVersionRaw = newValue.description }
+    }
+    
     /// Computed property to work with transcription mode as an enum
     private var transcriptionMode: TranscriptionModeSelection {
         get {
@@ -120,9 +147,6 @@ struct ContentView: View {
     @State private var enableDiarization: Bool = true
     @State private var diarizationMode: DiarizationMode = .disabled
     @State private var isTranslation: Bool = false
-    @State private var minNumOfSpeakers: Int? = nil
-    @State private var minActiveOffset: Double? = nil
-    @State private var speakerInfoStrategy: SpeakerInfoStrategy = .segment
     @State private var isRecording: Bool = false
 
     // MARK: Eager mode properties
@@ -156,6 +180,14 @@ struct ContentView: View {
     @State private var currentSDKInfo: [String: String] = [:]
     @State private var currentAnalyticsTags: [String: String] = [:]
     @State private var showDiagnosticInfo: Bool = false
+    @State private var showCustomVocabularySheet: Bool = false
+    @State private var customVocabularyInput: String = ""
+    @State private var customVocabularyWords: [String] = []
+    @State private var showCustomVocabularyErrorAlert: Bool = false
+    @State private var customVocabularyErrorMessage: String = ""
+    @State private var showDeleteModelAlert: Bool = false
+    @State private var isEditingCustomVocabulary: Bool = false
+    @AppStorage("enableCustomVocabulary") private var enableCustomVocabulary: Bool = false
     @State private var lastConfirmedSegmentEndTime: Float = 0.0
 
     private enum TrackingPermissionState: Int {
@@ -173,6 +205,10 @@ struct ContentView: View {
     enum TabMode: String, CaseIterable {
         case transcription = "Transcription"
         case diarize = "Speakers"
+    }
+
+    private var supportsCustomVocabulary: Bool {
+        selectedModel.lowercased().contains("parakeet")
     }
 
     init(analyticsLogger: AnalyticsLogger = NoOpAnalyticsLogger()) {
@@ -235,7 +271,8 @@ struct ContentView: View {
     var diarizationOptions: DiarizationOptions? {
         DiarizationOptions(
             numberOfSpeakers: minNumOfSpeakers,
-            minActiveOffset: minActiveOffset.map { Float($0) }
+            minActiveOffset: minActiveOffset.map { Float($0) },
+            useExclusiveReconciliation: useExclusiveReconciliation
         )
     }
 
@@ -352,14 +389,22 @@ struct ContentView: View {
                                         var streamingText: [String] = []
                                         
                                         if let device = streamViewModel.deviceResult {
-                                            let deviceText = device.confirmedText + device.hypothesisText
+                                            let deviceSegments = device.confirmedSegments + device.hypothesisSegments
+                                            let deviceText = TranscriptionUtilities.formatSegments(
+                                                deviceSegments,
+                                                withTimestamps: enableTimestamps
+                                            ).joined(separator: " ")
                                             if !deviceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                                 streamingText.append("Device: " + deviceText)
                                             }
                                         }
                                         
                                         if let system = streamViewModel.systemResult {
-                                            let systemText = system.confirmedText + system.hypothesisText
+                                            let systemSegments = system.confirmedSegments + system.hypothesisSegments
+                                            let systemText = TranscriptionUtilities.formatSegments(
+                                                systemSegments,
+                                                withTimestamps: enableTimestamps
+                                            ).joined(separator: " ")
                                             if !systemText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                                 streamingText.append("System: " + systemText)
                                             }
@@ -466,6 +511,18 @@ struct ContentView: View {
             }
             #endif
         }
+        .alert("Delete Model", isPresented: $showDeleteModelAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                deleteModel()
+            }
+        } message: {
+            if enableCustomVocabulary {
+                Text("Are you sure you want to delete the model '\(selectedModel)' and custom vocabulary models?")
+            } else {
+                Text("Are you sure you want to delete the model '\(selectedModel)'?")
+            }
+        }
     }
 
     private func updateTracking(state: TrackingPermissionState) {
@@ -556,6 +613,7 @@ struct ContentView: View {
     // MARK: - Transcription
 
     var fullscreenTranscriptionView: some View {
+        #if os(macOS)
         ZStack {
             transcriptionView
             VStack {
@@ -574,6 +632,33 @@ struct ContentView: View {
                 Spacer()
             }
         }
+        #else
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Playground")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                    Text("by Argmax")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .offset(x: 2, y: -2)
+                }
+                Spacer()
+                Button {
+                    isTranscriptionFullscreen = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
+
+            transcriptionView
+        }
+        #endif
     }
 
     var transcriptionView: some View {
@@ -629,6 +714,13 @@ struct ContentView: View {
                 } message: {
                     Text(streamingError?.alertMessage ?? "An error occurred")
                 }
+                .alert("Custom Vocabulary Error", isPresented: $showCustomVocabularyErrorAlert) {
+                    Button("OK") {
+                        showCustomVocabularyErrorAlert = false
+                    }
+                } message: {
+                    Text(customVocabularyErrorMessage)
+                }
                 HStack {
                     if !sdkCoordinator.availableModelNames.isEmpty {
                         let localModelNames = sdkCoordinator.modelStore.localModels.flatMap { $0.models }.map { $0.description }
@@ -642,8 +734,11 @@ struct ContentView: View {
                         }
                         .pickerStyle(MenuPickerStyle())
                         .disabled(sdkCoordinator.whisperKitModelState != .loaded && sdkCoordinator.whisperKitModelState != .unloaded)
-                        .onChange(of: selectedModel, initial: false) { _, _ in
+                        .onChange(of: selectedModel, initial: false) { _, newValue in
                             sdkCoordinator.modelDownloadFailed = false // Reset failure state when model changes
+                            if !newValue.lowercased().contains("parakeet") {
+                                enableCustomVocabulary = false
+                            }
                             Task {
                                 await sdkCoordinator.reset()
                             }
@@ -653,16 +748,48 @@ struct ContentView: View {
                             .progressViewStyle(CircularProgressViewStyle())
                             .scaleEffect(0.5)
                     }
-
+                    
+                    if supportsCustomVocabulary && enableCustomVocabulary && sdkCoordinator.whisperKitModelState == .loaded {
+                        Button {
+                            customVocabularyInput = customVocabularyWords.joined(separator: "\n")
+                            isEditingCustomVocabulary = customVocabularyWords.isEmpty
+                            showCustomVocabularySheet = true
+                        } label: {
+                            Image(systemName: "character.book.closed")
+                                .symbolRenderingMode(.hierarchical)
+                                .imageScale(.medium)
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showCustomVocabularySheet) {
+                            CustomVocabularySheet(
+                                isPresented: $showCustomVocabularySheet,
+                                words: $customVocabularyWords,
+                                input: $customVocabularyInput,
+                                isEditing: $isEditingCustomVocabulary,
+                                canUpdateVocabulary: { supportsCustomVocabulary && enableCustomVocabulary && sdkCoordinator.whisperKit != nil },
+                                onError: { message in
+                                    customVocabularyErrorMessage = message
+                                    showCustomVocabularyErrorAlert = true
+                                }
+                            )
+                        }
+                        .accessibilityLabel("Set Custom Vocabulary")
+#if os(macOS)
+                        .help("Set Custom Vocabulary")
+#endif
+                    }
+                    
                     Button(action: {
-                        deleteModel()
+                        showDeleteModelAlert = true
                     }, label: {
                         Image(systemName: "trash")
                     })
                     .help("Delete model")
                     .buttonStyle(BorderlessButtonStyle())
-                    .disabled(sdkCoordinator.modelStore.localModels.flatMap { $0.models }.isEmpty)
-                    .disabled(!sdkCoordinator.modelStore.localModels.flatMap { $0.models }.contains(selectedModel))
+                    .disabled({
+                        let localModels = sdkCoordinator.modelStore.localModels.flatMap { $0.models }
+                        return localModels.isEmpty || !localModels.contains(selectedModel)
+                    }())
 
                     #if os(macOS)
                     Button(action: {
@@ -684,6 +811,22 @@ struct ContentView: View {
                             .padding(.bottom, 4)
                     }
 
+                    if supportsCustomVocabulary {
+#if os(macOS)
+                        Toggle(isOn: $enableCustomVocabulary) {
+                            Label("Enable Custom Vocabulary", systemImage: "character.book.closed")
+                        }
+                        .toggleStyle(.checkbox)
+                        .padding(.bottom, 4)
+                        .frame(maxWidth: .infinity, alignment: .center)
+#else
+                        Toggle(isOn: $enableCustomVocabulary) {
+                            Label("Enable Custom Vocabulary", systemImage: "character.book.closed")
+                        }
+                        .padding(.bottom, 4)
+#endif
+                    }
+
                     Button {
                         let shouldRedownload = sdkCoordinator.modelDownloadFailed // Capture before reset
                         resetState()
@@ -701,11 +844,11 @@ struct ContentView: View {
                             ProgressView(value: sdkCoordinator.whisperKitModelProgress, total: 1.0)
                                 .progressViewStyle(.linear)
                                 .frame(maxWidth: .infinity)
-                            
+
                             Text(String(format: "%.1f%%", sdkCoordinator.whisperKitModelProgress * 100))
                                 .font(.caption)
                                 .foregroundColor(.gray)
-                            
+
                             Button {
                                 // Only delete if model wasnt fully downloaded
                                 cancelDownload(delete: sdkCoordinator.whisperKitModelProgress < 0.7)
@@ -722,6 +865,7 @@ struct ContentView: View {
                         }
                     }
                 }
+
             }
         }
     }
@@ -1078,9 +1222,9 @@ struct ContentView: View {
                     }()
 
                     Picker("", selection: Binding<Int>(
-                        get: { minNumOfSpeakers ?? 0 },
-                        set: {
-                            minNumOfSpeakers = $0 == 0 ? nil : $0
+                        get: { storedMinNumOfSpeakers < 0 ? 0 : storedMinNumOfSpeakers },
+                        set: { newValue in
+                            storedMinNumOfSpeakers = newValue == 0 ? -1 : newValue
                             resetState()
                             rerunTranscription()
                         }
@@ -1443,30 +1587,57 @@ struct ContentView: View {
                     InfoButton("You can change the way diarization runs. You can disable it, run it sequentially with transcription, or run it concurrently. Switching modes will re-run the transcription and diarization.")
                 }
                 .disabled(isStreamMode)
-                VStack {
-                    Text("Minimum Gap Between Speakers")
-                    HStack {
-                        Slider(
-                            value: Binding(
-                                get: { minActiveOffset ?? 0 },
-                                set: {
-                                    minActiveOffset = $0 == 0 ? nil : $0
+                
+                HStack {
+                    Picker("Clusterer Version", selection: Binding(
+                        get: { clustererVersion },
+                        set: { newVersion in
+                            clustererVersionRaw = newVersion.description
+                        }
+                    )) {
+                        ForEach(ClustererVersion.allCases, id: \.self) { version in
+                            Text(version.description).tag(version)
+                        }
+                    }
+                    InfoButton("Select the clusterer version for speaker diarization.")
+                }
+                
+                HStack {
+                    Text("Use Exclusive Reconciliation")
+                    Toggle("", isOn: $useExclusiveReconciliation)
+                    Spacer()
+                    InfoButton("When enabled, ensures that speech from different speakers does not overlap in the diarization output.")
+                }
+                
+                    VStack {
+                        Text("Minimum Gap Between Speakers")
+                        HStack {
+                            Slider(
+                                value: Binding(
+                                    get: { minActiveOffset ?? 0 },
+                                set: { newValue in
+                                    storedMinActiveOffset = newValue == 0 ? -1.0 : newValue
                                 }
-                            ),
-                            in: 0...5,
-                            step: 0.1
-                        )
-                        Text(minActiveOffset == nil || minActiveOffset == 0 ? "Auto" : String(format: "%.1fs", minActiveOffset ?? 0))
+                                ),
+                                in: 0...5,
+                                step: 0.1
+                            )
+                            Text(minActiveOffset == nil || minActiveOffset == 0 ? "Auto" : String(format: "%.1fs", minActiveOffset ?? 0))
                             .frame(width: 45)
                         InfoButton("Controls the minimum time gap in seconds between speaker segments. Higher values will combine nearby segments from the same speaker.")
                     }
                 }
 
-                HStack {
-                    Text("Speaker Info Strategy")
-                    InfoButton("Select the strategy for assigning speaker info: 'word' for word-level, 'segment' for segment-level.")
-                    Spacer()
-                    Picker("", selection: $speakerInfoStrategy) {
+                    HStack {
+                        Text("Speaker Info Strategy")
+                        InfoButton("Select the strategy for assigning speaker info: 'word' for word-level, 'segment' for segment-level.")
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { speakerInfoStrategy },
+                            set: { newStrategy in
+                                speakerInfoStrategyRaw = newStrategy == .word ? "word" : "segment"
+                            }
+                        )) {
                         Text("Word").tag(SpeakerInfoStrategy.word)
                         Text("Segment").tag(SpeakerInfoStrategy.segment)
                     }
@@ -1746,7 +1917,6 @@ struct ContentView: View {
     }
 
     // MARK: - Logic
-
     func loadModel(_ model: String, redownload: Bool = false) {
         sdkCoordinator.modelDownloadFailed = false // Reset failure state on new attempt
         Logging.shared.logLevel = Logging.LogLevel.debug
@@ -1760,8 +1930,14 @@ struct ContentView: View {
             - Prefill Data:     \(computeUnits.prefillCompute.description)
         """)
 
+        let supportsCustomVocabularyForModel = model.lowercased().contains("parakeet")
+        let shouldEnableCustomVocabulary = supportsCustomVocabularyForModel && enableCustomVocabulary
+        let vocabularySnapshot = customVocabularyWords
+
         Task {
             do {
+                let customVocabularyConfig: CustomVocabularyConfig? = shouldEnableCustomVocabulary ? .init(words: nil) : nil
+                
                 let proConfig = WhisperKitProConfig(
                     computeOptions: computeUnits,
                     verbose: true,
@@ -1771,12 +1947,14 @@ struct ContentView: View {
                     useBackgroundDownloadSession: false,
                     fastLoad: enableFastLoad,
                     fastLoadEncoderComputeUnits: fastLoadEncoderComputeUnits,
-                    fastLoadDecoderComputeUnits: fastLoadDecoderComputeUnits
+                    fastLoadDecoderComputeUnits: fastLoadDecoderComputeUnits,
+                    customVocabularyConfig: customVocabularyConfig
                 )
                 try await sdkCoordinator.prepare(
                     modelName: model,
                     config: proConfig,
-                    redownload: redownload
+                    redownload: redownload,
+                    clustererVersion: clustererVersion
                 )
 
                 await sdkCoordinator.updateModelList()
@@ -1784,6 +1962,19 @@ struct ContentView: View {
                 await MainActor.run {
                     availableLanguages = Constants.languages.map { $0.key }.sorted()
                     sdkCoordinator.modelDownloadFailed = false // Success - clear any previous failure
+                }
+
+                if shouldEnableCustomVocabulary && !vocabularySnapshot.isEmpty {
+                    do {
+                        try await sdkCoordinator.updateCustomVocabulary(words: vocabularySnapshot)
+                    } catch {
+                        Logging.error("Failed to update custom vocabulary after model load: \(error)")
+                        await MainActor.run {
+                            let message = error.localizedDescription.isEmpty ? "Unable to update custom vocabulary." : error.localizedDescription
+                            customVocabularyErrorMessage = message
+                            showCustomVocabularyErrorAlert = true
+                        }
+                    }
                 }
             } catch {
                 Logging.debug("Error loading model via coordinator: \(error)")
@@ -1794,13 +1985,16 @@ struct ContentView: View {
         }
     }
     
+
     func deleteModel() {
         Task {
             do {
                 try await sdkCoordinator.delete(modelName: selectedModel)
                 await sdkCoordinator.updateModelList()
                 await sdkCoordinator.reset()
-                
+                if enableCustomVocabulary {
+                    try await sdkCoordinator.deleteCustomVocabularyModels()
+                }
             } catch {
                 Logging.debug("Error deleting model: \(error)")
             }

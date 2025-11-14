@@ -92,7 +92,7 @@ struct Playground: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Argmax Playground")  {
              ContentView(analyticsLogger: analyticsLogger)
                  #if os(macOS)
                  .environmentObject(audioProcessDiscoverer)

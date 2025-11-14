@@ -46,10 +46,10 @@ struct TranscriptionLiveActivity: Widget {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .frame(minHeight: 32, alignment: .topLeading)
-                        } else if !context.state.currentHypothesis.isEmpty {
+                        } else if !context.state.currentHypothesis.characters.isEmpty {
                             Text(context.state.currentHypothesis)
                                 .font(.caption)
-                                .lineLimit(nil)
+                                .lineLimit(3)
                                 .truncationMode(.head)
                                 .frame(minHeight: 32, alignment: .topLeading)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -107,7 +107,7 @@ struct LockScreenLiveActivityView: View {
                 Text("Microphone session interrupted. Restart transcription from the app.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-            } else if !context.state.currentHypothesis.isEmpty {
+            } else if !context.state.currentHypothesis.characters.isEmpty {
                 Text(context.state.currentHypothesis)
                     .font(.subheadline)
                     .lineLimit(3)

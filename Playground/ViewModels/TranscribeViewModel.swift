@@ -57,6 +57,7 @@ class TranscribeViewModel: ObservableObject {
     @Published var bufferEnergy: [Float] = []
     @Published var confirmedSegments: [TranscriptionSegment] = []
     @Published var unconfirmedSegments: [TranscriptionSegment] = []
+    @Published var customVocabularyResults: VocabularyResults = [:]
     @Published var showShortAudioToast: Bool = false
     @Published var diarizedSpeakerSegments: [SpeakerSegment] = []
     @Published var speakerNames: [Int: String] = [:]
@@ -86,6 +87,11 @@ class TranscribeViewModel: ObservableObject {
     @AppStorage("useVAD") private var useVAD: Bool = true
     @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
     
+    #if os(macOS)
+    private let energyHistoryLimit = 512
+    #else
+    private let energyHistoryLimit = 256
+    #endif
     private let sdkCoordinator: ArgmaxSDKCoordinator
     
     init(sdkCoordinator: ArgmaxSDKCoordinator) {
@@ -113,6 +119,7 @@ class TranscribeViewModel: ObservableObject {
         confirmedSegments = []
         unconfirmedSegments = []
         diarizedSpeakerSegments = []
+        customVocabularyResults = [:]
         
         // Reset timing and processing stats
         audioSampleDuration = 0
@@ -233,7 +240,8 @@ class TranscribeViewModel: ObservableObject {
                 Task {
                     if let whisperKit = self.sdkCoordinator.whisperKit {
                         await MainActor.run {
-                            self.bufferEnergy = whisperKit.audioProcessor.relativeEnergy
+                            let cappedEnergy = whisperKit.audioProcessor.relativeEnergy.suffix(self.energyHistoryLimit)
+                            self.bufferEnergy = Array(cappedEnergy)
                         }
                     }
                     let bufferSeconds = Double(self.sdkCoordinator.whisperKit?.audioProcessor.audioSamples.count ?? 0) / Double(WhisperKit.sampleRate)
@@ -287,6 +295,11 @@ class TranscribeViewModel: ObservableObject {
         // Retrieve the current audio buffer from the audio processor
         let currentBuffer = whisperKit.audioProcessor.audioSamples
 
+        // Perform an eager copy of the recording buffer off the main actor to avoid UI stalls.
+        let bufferCopy: [Float] = await Task.detached(priority: .userInitiated) {
+            Array(currentBuffer)
+        }.value
+
         // Calculate the size and duration of the next buffer segment
         let nextBufferSize = currentBuffer.count - lastBufferSize
         let nextBufferSeconds = Float(nextBufferSize) / Float(WhisperKit.sampleRate)
@@ -323,16 +336,19 @@ class TranscribeViewModel: ObservableObject {
         }
 
         // Store this for next iterations VAD
-        Task { @MainActor in
+        await MainActor.run {
             lastBufferSize = currentBuffer.count
         }
 
         let transcriptionStart = Date()
-        let transcription = try await transcribeAudioSamples(Array(currentBuffer), options) { [weak self] joinedText in
-            Task { @MainActor in
-                self?.currentText = joinedText
+        let transcription = try await Task.detached(priority: .userInitiated) { [weak self] () -> TranscriptionResult? in
+            guard let self else { return nil }
+            return try await self.transcribeAudioSamples(bufferCopy, options) { joinedText in
+                await MainActor.run {
+                    self.currentText = joinedText
+                }
             }
-        }
+        }.value
         let transcriptionEnd = Date()
 
         // MARK: Transcribe recording mode
@@ -349,7 +365,9 @@ class TranscribeViewModel: ObservableObject {
                 }
             }
         } else {
-            showShortAudioToast = false
+            await MainActor.run {
+                showShortAudioToast = false
+            }
         }
 
         // Diarization if speaker kit available and mode is not disabled
@@ -360,7 +378,7 @@ class TranscribeViewModel: ObservableObject {
                 }
                 
                 try await speakerKit.initializeDiarization(
-                    audioArray: Array(currentBuffer),
+                    audioArray: bufferCopy,
                     decodeOptions: options
                 ) { audioClip in
                     Task {
@@ -573,7 +591,7 @@ class TranscribeViewModel: ObservableObject {
     // MARK: - Private Methods
     
     /// Core transcription method that processes raw audio samples with progress callbacks and early stopping
-    private func transcribeAudioSamples(_ samples: [Float], _ options: DecodingOptions, chunksCallback: @escaping (String) -> Void) async throws -> TranscriptionResult? {
+    private func transcribeAudioSamples(_ samples: [Float], _ options: DecodingOptions, chunksCallback: @escaping (String) async -> Void) async throws -> TranscriptionResult? {
         guard let whisperKit = sdkCoordinator.whisperKit else { return nil }
         
         // Early stopping checks
@@ -601,7 +619,7 @@ class TranscribeViewModel: ObservableObject {
                 self.currentChunks[chunkId] = updatedChunk
                 let joinedChunks = self.currentChunks.sorted { $0.key < $1.key }.flatMap { $0.value.chunkText }.joined(separator: "\n")
             
-                chunksCallback(joinedChunks)
+                await chunksCallback(joinedChunks)
                 // TODO - reenable if needed
                 // self.currentFallbacks = fallbacks
             }
@@ -631,7 +649,12 @@ class TranscribeViewModel: ObservableObject {
             callback: decodingCallback
         )
         
-        let mergedResults = TranscriptionUtilities.mergeTranscriptionResults(transcriptionResults)
+        let mergedResults = WhisperKitProUtils.mergeTranscriptionResults(transcriptionResults)
+        if let proResult = mergedResults as? TranscriptionResultPro {
+            await MainActor.run {
+                self.customVocabularyResults = proResult.customVocabularyResults
+            }
+        }
         return mergedResults
     }
     

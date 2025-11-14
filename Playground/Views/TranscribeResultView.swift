@@ -56,29 +56,36 @@ struct TranscribeResultView: View {
             }
             
             ScrollView {
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 8) {
                     if selectedMode == .transcription {
                         ForEach(Array(transcribeViewModel.confirmedSegments.enumerated()), id: \.element) { _, segment in
                             let timestampText = enableTimestamps
                                 ? "[\(String(format: "%.2f", segment.start)) --> \(String(format: "%.2f", segment.end))] "
                                 : ""
-                            Text(timestampText + segment.text)
-                                .font(.headline)
-                                .fontWeight(.bold)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HighlightedTextView(
+                                prefixText: timestampText,
+                                segments: [segment],
+                                customVocabularyResults: transcribeViewModel.customVocabularyResults,
+                                font: .headline.bold(),
+                                foregroundColor: .primary
+                            )
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         ForEach(Array(transcribeViewModel.unconfirmedSegments.enumerated()), id: \.element) { _, segment in
                             let timestampText = enableTimestamps
                                 ? "[\(String(format: "%.2f", segment.start)) --> \(String(format: "%.2f", segment.end))] "
                                 : ""
-                            Text(timestampText + segment.text)
-                                .font(.headline)
-                                .fontWeight(.bold)
-                                .foregroundColor(.gray)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HighlightedTextView(
+                                prefixText: timestampText,
+                                segments: [segment],
+                                customVocabularyResults: transcribeViewModel.customVocabularyResults,
+                                font: .headline.bold(),
+                                foregroundColor: .gray
+                            )
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                     } else if selectedMode == .diarize {
@@ -104,6 +111,7 @@ struct TranscribeResultView: View {
                         }
 
                         ForEach(Array(transcribeViewModel.diarizedSpeakerSegments.enumerated()), id: \.element.id) { index, segment in
+                            let diarizedSegments = transcriptionSegments(for: segment)
                             HStack {
                                 VStack(alignment: .leading) {
                                     if index == 0 || transcribeViewModel.diarizedSpeakerSegments[index - 1].speaker.speakerId != segment.speaker.speakerId {
@@ -115,14 +123,16 @@ struct TranscribeResultView: View {
                                             .foregroundColor(.secondary)
                                     }
 
-                                    Text(segment.text)
-                                        .font(.headline)
-                                        .fontWeight(.regular)
-                                        .padding(10)
-                                        .background(transcribeViewModel.getMessageBackground(speaker: segment.speaker))
-                                        .foregroundColor(.white)
-                                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                                        .multilineTextAlignment(.leading)
+                                    HighlightedTextView(
+                                        segments: diarizedSegments,
+                                        customVocabularyResults: transcribeViewModel.customVocabularyResults,
+                                        font: .headline,
+                                        foregroundColor: .white
+                                    )
+                                    .padding(10)
+                                    .background(transcribeViewModel.getMessageBackground(speaker: segment.speaker))
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .multilineTextAlignment(.leading)
                                         .contextMenu {
                                             Button(action: {
                                                 transcribeViewModel.renameSpeaker(speakerId: segment.speaker.speakerId ?? -1)
@@ -144,16 +154,19 @@ struct TranscribeResultView: View {
                     }
 
                     if enableDecoderPreview {
-                        Text("\(transcribeViewModel.currentText)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HighlightedTextView(
+                            prefixText: transcribeViewModel.currentText,
+                            customVocabularyResults: transcribeViewModel.customVocabularyResults,
+                            font: .caption,
+                            foregroundColor: .secondary
+                        )
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .frame(maxWidth: .infinity)
-            .defaultScrollAnchor(.bottom)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .defaultScrollAnchor(.top)
             .textSelection(.enabled)
             .padding()
         }
@@ -181,6 +194,20 @@ struct TranscribeResultView: View {
             }
         }
     }
+
+    private func transcriptionSegments(for segment: SpeakerSegment) -> [TranscriptionSegment] {
+        if let transcription = segment.transcription {
+            return [transcription]
+        }
+        
+        let words = segment.speakerWords.map(\.wordTiming)
+        return [
+            TranscriptionSegment(
+                text: segment.text,
+                words: words.isEmpty ? nil : words
+            )
+        ]
+    }
 }
 
 #Preview("TranscribeResultView Sample") {
@@ -201,19 +228,40 @@ struct TranscribeResultView: View {
     .onAppear {
         UserDefaults.standard.set(true, forKey: "enableTimestamps")
         UserDefaults.standard.set(true, forKey: "enableDecoderPreview")
+        
+        let quickWord = WordTiming(word: "quick", tokens: [], start: 0.0, end: 0.3, probability: 0.95)
+        let sampleWord = WordTiming(word: "sample", tokens: [], start: 2.5, end: 2.9, probability: 0.92)
+        let foxWord = WordTiming(word: "fox", tokens: [], start: 0.3, end: 0.4, probability: 0.9)
+        transcribeViewModel.customVocabularyResults = [
+            quickWord: [quickWord],
+            sampleWord: [sampleWord],
+            foxWord: [foxWord]
+        ]
         // Set up sample transcription segments
         transcribeViewModel.confirmedSegments = [
             TranscriptionSegment(
                 id: 0,
                 start: 0.0,
                 end: 2.5,
-                text: "The quick brown fox jumps over the lazy dog."
+                text: "The quick brown fox jumps over the lazy dog.",
+                words: [
+                    WordTiming(word: "The", tokens: [], start: 0.0, end: 0.05, probability: 0.9),
+                    quickWord,
+                    WordTiming(word: "brown", tokens: [], start: 0.1, end: 0.15, probability: 0.9),
+                    foxWord
+                ]
             ),
             TranscriptionSegment(
                 id: 1,
                 start: 2.5,
                 end: 5.0,
-                text: "This is a sample transcription for preview purposes."
+                text: "This is a sample transcription for preview purposes.",
+                words: [
+                    WordTiming(word: "This", tokens: [], start: 0.0, end: 0.05, probability: 0.9),
+                    WordTiming(word: "is", tokens: [], start: 0.05, end: 0.1, probability: 0.9),
+                    WordTiming(word: "a", tokens: [], start: 0.1, end: 0.12, probability: 0.9),
+                    sampleWord
+                ]
             )
         ]
         
@@ -222,7 +270,12 @@ struct TranscribeResultView: View {
                 id: 2,
                 start: 5.0,
                 end: 7.5,
-                text: "This text appears in gray as unconfirmed."
+                text: "This text appears in gray as unconfirmed.",
+                words: [
+                    WordTiming(word: "This", tokens: [], start: 0.0, end: 0.05, probability: 0.9),
+                    WordTiming(word: "text", tokens: [], start: 0.05, end: 0.1, probability: 0.9),
+                    WordTiming(word: "appears", tokens: [], start: 0.1, end: 0.2, probability: 0.9)
+                ]
             )
         ]
         
