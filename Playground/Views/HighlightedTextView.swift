@@ -6,14 +6,14 @@ import Argmax
 struct HighlightedTextView: View {
     let prefixText: String
     let segments: [TranscriptionSegment]
-    let customVocabularyResults: [WordTiming: [WordTiming]]
+    let customVocabularyResults: VocabularyResults
     let font: Font
     let foregroundColor: Color
     
     init(
         prefixText: String = "",
         segments: [TranscriptionSegment] = [],
-        customVocabularyResults: [WordTiming: [WordTiming]] = [:],
+        customVocabularyResults: VocabularyResults = [:],
         font: Font = .body,
         foregroundColor: Color = .primary
     ) {
@@ -47,7 +47,7 @@ struct HighlightedTextView: View {
     static func createHighlightedAttributedString(
         prefixText: String = "",
         segments: [TranscriptionSegment] = [],
-        customVocabularyResults: [WordTiming: [WordTiming]] = [:],
+        customVocabularyResults: VocabularyResults = [:],
         font: Font,
         foregroundColor: Color
     ) -> AttributedString {
@@ -129,7 +129,7 @@ struct HighlightedTextView: View {
     let sdkWord = WordTiming(word: "SDK", tokens: [], start: 1.0, end: 1.2, probability: 0.9)
     let developersWord = WordTiming(word: "developers", tokens: [], start: 1.2, end: 1.5, probability: 0.9)
     
-    let vocabulary: [WordTiming: [WordTiming]] = [
+    let vocabulary: VocabularyResults = [
         helloWord: [helloWord],
         specialWord: [specialWord],
         sdkWord: [sdkWord],

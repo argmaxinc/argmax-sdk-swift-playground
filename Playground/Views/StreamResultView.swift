@@ -17,7 +17,7 @@ struct StreamResultLine: View {
 
     let result: StreamViewModel.StreamResult
     
-    private func createHighlightedAttributedString(prefix: String = "", segments: [TranscriptionSegment], customVocabularyResults: [WordTiming: [WordTiming]] = [:], isBold: Bool, color: Color) -> AttributedString {
+    private func createHighlightedAttributedString(prefix: String = "", segments: [TranscriptionSegment], customVocabularyResults: VocabularyResults = [:], isBold: Bool, color: Color) -> AttributedString {
         let baseFont: Font = isBold ? .headline.bold() : .headline
         return HighlightedTextView.createHighlightedAttributedString(
             prefixText: prefix,

@@ -57,7 +57,7 @@ class TranscribeViewModel: ObservableObject {
     @Published var bufferEnergy: [Float] = []
     @Published var confirmedSegments: [TranscriptionSegment] = []
     @Published var unconfirmedSegments: [TranscriptionSegment] = []
-    @Published var customVocabularyResults: [WordTiming: [WordTiming]] = [:]
+    @Published var customVocabularyResults: VocabularyResults = [:]
     @Published var showShortAudioToast: Bool = false
     @Published var diarizedSpeakerSegments: [SpeakerSegment] = []
     @Published var speakerNames: [Int: String] = [:]

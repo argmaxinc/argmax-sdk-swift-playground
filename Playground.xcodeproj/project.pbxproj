@@ -24,6 +24,7 @@
 		7446C9172E4D536400290EAB /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7446C9162E4D536400290EAB /* SwiftUI.framework */; };
 		7446C9242E4D536500290EAB /* TranscriptionLiveActivityExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7446C9122E4D536400290EAB /* TranscriptionLiveActivityExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7469F1FA2E3AC3D00090AEBA /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 7469F1F92E3AC3D00090AEBA /* README.md */; };
+		746D9D512EC7D12300CBFB4A /* VocabularyResults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746D9D502EC7D11E00CBFB4A /* VocabularyResults.swift */; };
 		746E4C062E39874F009623D7 /* DefaultEnvInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746E4C042E39874F009623D7 /* DefaultEnvInitializer.swift */; };
 		746E4C0A2E398757009623D7 /* PlaygroundEnvInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746E4C082E398757009623D7 /* PlaygroundEnvInitializer.swift */; };
 		746F2A072E39D7030081D0D6 /* NoOpAnalyticsLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 746F2A062E39D6FC0081D0D6 /* NoOpAnalyticsLogger.swift */; };
@@ -103,6 +104,7 @@
 		7446C9142E4D536400290EAB /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		7446C9162E4D536400290EAB /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		7469F1F92E3AC3D00090AEBA /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		746D9D502EC7D11E00CBFB4A /* VocabularyResults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyResults.swift; sourceTree = "<group>"; };
 		746E4C042E39874F009623D7 /* DefaultEnvInitializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultEnvInitializer.swift; sourceTree = "<group>"; };
 		746E4C082E398757009623D7 /* PlaygroundEnvInitializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundEnvInitializer.swift; sourceTree = "<group>"; };
 		746F2A062E39D6FC0081D0D6 /* NoOpAnalyticsLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoOpAnalyticsLogger.swift; sourceTree = "<group>"; };
@@ -272,6 +274,7 @@
 		74C12F122E2EB54A00C772C3 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				746D9D502EC7D11E00CBFB4A /* VocabularyResults.swift */,
 				74F860952E2B19060007163C /* CoreAudioUtils.swift */,
 			);
 			path = Utils;
@@ -404,6 +407,7 @@
 				747E67082E300F780061E778 /* TranscribeResultView.swift in Sources */,
 				74312CDC2E1D02E3000D994A /* MacAudioDevicesView.swift in Sources */,
 				74F3B7BE2E1CF44F00C544D1 /* AudioProcessDiscoverer.swift in Sources */,
+				746D9D512EC7D12300CBFB4A /* VocabularyResults.swift in Sources */,
 				1677AFE62B57704E008C61C0 /* ContentView.swift in Sources */,
 				74F3B7C12E1CF4F400C544D1 /* AudioProcess.swift in Sources */,
 				746F2A072E39D7030081D0D6 /* NoOpAnalyticsLogger.swift in Sources */,

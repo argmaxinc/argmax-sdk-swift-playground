@@ -144,7 +144,7 @@ class StreamViewModel: ObservableObject {
         var title: String = ""
         var confirmedSegments: [TranscriptionSegment] = []
         var hypothesisSegments: [TranscriptionSegment] = []
-        var customVocabularyResults: [WordTiming: [WordTiming]] = [:]
+        var customVocabularyResults: VocabularyResults = [:]
         var streamEndSeconds: Float?
         var bufferEnergy: [Float] = []
         var streamTimestampText: String {
@@ -316,8 +316,8 @@ class StreamViewModel: ObservableObject {
     }
     
     private func mergeVocabularyResults(
-        existing: inout [WordTiming: [WordTiming]],
-        newResults: [WordTiming: [WordTiming]]
+        existing: inout VocabularyResults,
+        newResults: VocabularyResults
     ) {
         guard !newResults.isEmpty else { return }
         for (key, occurrences) in newResults {
@@ -333,7 +333,7 @@ class StreamViewModel: ObservableObject {
     @MainActor
     private func handleResult(_ result: LiveResult, for sourceId: String) {
         switch result {
-        case .hypothesis(let text, _, let hypothesisResult):
+        case .hypothesis(_, _, let hypothesisResult):
             let now = Date().timeIntervalSince1970
             let last = lastHypothesisUpdateAtBySource[sourceId] ?? 0
             // Update at most 10 times per second per source
@@ -354,7 +354,12 @@ class StreamViewModel: ObservableObject {
             Task {
                 await liveActivityManager.updateContentState { oldState in
                     var state = oldState
-                    let highlightedHypothesis = HighlightedTextView.createHighlightedAttributedString(segments: deviceResult?.hypothesisSegments ?? [], customVocabularyResults: deviceResult?.customVocabularyResults ?? [:], font: .body, foregroundColor: .primary)
+                    let highlightedHypothesis = HighlightedTextView.createHighlightedAttributedString(
+                        segments: deviceResult?.hypothesisSegments ?? [],
+                        customVocabularyResults: deviceResult?.customVocabularyResults ?? [:],
+                        font: .body,
+                        foregroundColor: .primary
+                    )
                     state.currentHypothesis = highlightedHypothesis
                     return state
                 }
