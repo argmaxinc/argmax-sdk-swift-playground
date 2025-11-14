@@ -12,7 +12,7 @@ struct TranscriptionAttributes: ActivityAttributes {
     /// Static configuration that doesn't change during the live activity session
     public struct ContentState: Codable, Hashable {
         /// Current transcription hypothesis text being processed
-        var currentHypothesis: String
+        var currentHypothesis: AttributedString
         
         /// Duration of audio processed in seconds
         var audioSeconds: Double

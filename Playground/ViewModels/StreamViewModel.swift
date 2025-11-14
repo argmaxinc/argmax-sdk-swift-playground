@@ -42,6 +42,11 @@ import ActivityKit
 /// - **`AudioProcessDiscoverer` / `AudioDeviceDiscoverer`:** (macOS only) These are used to determine which
 ///   audio sources are available for streaming.
 class StreamViewModel: ObservableObject {
+    #if os(macOS)
+    private let energyHistoryLimit = 512
+    #else
+    private let energyHistoryLimit = 256
+    #endif
     // Stream Results - per-stream data for UI
     @Published var deviceResult: StreamResult?
     @Published var systemResult: StreamResult?
@@ -137,12 +142,11 @@ class StreamViewModel: ObservableObject {
     /// Contains all transcription data for a single stream including text results, timing information, and audio energy data
     struct StreamResult {
         var title: String = ""
-        var confirmedText: String = ""
-        var hypothesisText: String = ""
+        var confirmedSegments: [TranscriptionSegment] = []
+        var hypothesisSegments: [TranscriptionSegment] = []
+        var customVocabularyResults: [WordTiming: [WordTiming]] = [:]
         var streamEndSeconds: Float?
         var bufferEnergy: [Float] = []
-        var bufferSeconds: Double = 0
-        var transcribeResult: TranscriptionResultPro? = nil
         var streamTimestampText: String {
             guard let end = streamEndSeconds else {
                 return ""
@@ -311,20 +315,37 @@ class StreamViewModel: ObservableObject {
         }
     }
     
+    private func mergeVocabularyResults(
+        existing: inout [WordTiming: [WordTiming]],
+        newResults: [WordTiming: [WordTiming]]
+    ) {
+        guard !newResults.isEmpty else { return }
+        for (key, occurrences) in newResults {
+            if var stored = existing[key] {
+                stored.append(contentsOf: occurrences)
+                existing[key] = stored
+            } else {
+                existing[key] = occurrences
+            }
+        }
+    }
+    
     @MainActor
     private func handleResult(_ result: LiveResult, for sourceId: String) {
         switch result {
-        case .hypothesis(let text, _, _):
+        case .hypothesis(let text, _, let hypothesisResult):
             let now = Date().timeIntervalSince1970
             let last = lastHypothesisUpdateAtBySource[sourceId] ?? 0
             // Update at most 10 times per second per source
             guard now - last >= 0.1 else { return }
             lastHypothesisUpdateAtBySource[sourceId] = now
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed != (isDeviceSource(sourceId) ? deviceResult?.hypothesisText : systemResult?.hypothesisText) else { return }
             updateStreamResult(sourceId: sourceId) { oldResult in
                 var newResult = oldResult
-                newResult.hypothesisText = trimmed
+                newResult.hypothesisSegments = hypothesisResult.hypothesisSegments
+                mergeVocabularyResults(
+                    existing: &newResult.customVocabularyResults,
+                    newResults: hypothesisResult.customVocabularyResults
+                )
                 return newResult
             }
             
@@ -333,28 +354,26 @@ class StreamViewModel: ObservableObject {
             Task {
                 await liveActivityManager.updateContentState { oldState in
                     var state = oldState
-                    state.currentHypothesis = trimmed
+                    let highlightedHypothesis = HighlightedTextView.createHighlightedAttributedString(segments: deviceResult?.hypothesisSegments ?? [], customVocabularyResults: deviceResult?.customVocabularyResults ?? [:], font: .body, foregroundColor: .primary)
+                    state.currentHypothesis = highlightedHypothesis
                     return state
                 }
             }
             #endif
             
-        case .confirm(let text, let seconds, let transcriptionResult):
+        case .confirm(_, let seconds, let confirmedResult):
             updateStreamResult(sourceId: sourceId) { oldResult in
                 var newResult = oldResult
-                let newText = text.trimmingCharacters(in: .whitespaces)
-                if !newText.isEmpty {
-                    if !newResult.confirmedText.isEmpty {
-                        newResult.confirmedText += " "
-                    }
-                    newResult.confirmedText += newText
-                }
+                newResult.confirmedSegments += confirmedResult.segments
                 newResult.streamEndSeconds = Float(seconds)
-                newResult.transcribeResult = transcriptionResult
+                mergeVocabularyResults(
+                    existing: &newResult.customVocabularyResults,
+                    newResults: confirmedResult.customVocabularyResults
+                )
                 return newResult
             }
             if let confirmedresultCallback = self.confirmedresultCallback {
-                confirmedresultCallback(sourceId, transcriptionResult)
+                confirmedresultCallback(sourceId, confirmedResult)
             }
         }
     }
@@ -373,18 +392,13 @@ class StreamViewModel: ObservableObject {
 
             // Limit the amount of energy samples passed to the UI for performance
             let energies = whisperKitPro.audioProcessor.relativeEnergy
-            #if os(iOS)
-            let newBufferEnergy = Array(energies.suffix(256))
-            #else
-            let newBufferEnergy = energies
-            #endif
+            let newBufferEnergy = Array(energies.suffix(self.energyHistoryLimit))
             let sampleCount = whisperKitPro.audioProcessor.audioSamples.count
             let audioSeconds = Double(sampleCount) / Double(WhisperKit.sampleRate)
 
             updateStreamResult(sourceId: source.id) { oldResult in
                 var newResult = oldResult
                 newResult.bufferEnergy = newBufferEnergy
-                newResult.bufferSeconds = audioSeconds
                 return newResult
             }
             

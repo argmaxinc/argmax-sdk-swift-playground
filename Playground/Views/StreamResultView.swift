@@ -16,6 +16,29 @@ struct StreamResultLine: View {
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
 
     let result: StreamViewModel.StreamResult
+    
+    private func createHighlightedAttributedString(prefix: String = "", segments: [TranscriptionSegment], customVocabularyResults: [WordTiming: [WordTiming]] = [:], isBold: Bool, color: Color) -> AttributedString {
+        let baseFont: Font = isBold ? .headline.bold() : .headline
+        return HighlightedTextView.createHighlightedAttributedString(
+            prefixText: prefix,
+            segments: segments,
+            customVocabularyResults: customVocabularyResults,
+            font: baseFont,
+            foregroundColor: color
+        )
+    }
+    
+    private func hasContent(in segments: [TranscriptionSegment]) -> Bool {
+        for segment in segments {
+            if let words = segment.words, !words.isEmpty {
+                return true
+            }
+            if !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
+        }
+        return false
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -33,32 +56,42 @@ struct StreamResultLine: View {
             // This ScrollView makes the text content scrollable if it overflows
             ScrollViewReader { proxy in
                 ScrollView {
+                    let hasConfirmed = hasContent(in: result.confirmedSegments)
+                    let hasHypothesis = hasContent(in: result.hypothesisSegments)
+                    let timestampText = enableTimestamps ? result.streamTimestampText : ""
+                    let confirmedPrefix = hasConfirmed ? timestampText : ""
+                    let hypothesisPrefix = hasConfirmed ? "" : (hasHypothesis ? timestampText : "")
+                    let confirmedAttributed = createHighlightedAttributedString(
+                        prefix: confirmedPrefix,
+                        segments: result.confirmedSegments,
+                        customVocabularyResults: result.customVocabularyResults,
+                        isBold: true,
+                        color: .primary
+                    )
+                    let hypothesisAttributed = createHighlightedAttributedString(
+                        prefix: hypothesisPrefix,
+                        segments: result.hypothesisSegments,
+                        customVocabularyResults: result.customVocabularyResults,
+                        isBold: false,
+                        color: .gray
+                    )
+                    let needsSpacer = !confirmedAttributed.characters.isEmpty && !hypothesisAttributed.characters.isEmpty
                     (
-                        (enableTimestamps ?
-                            Text(result.streamTimestampText)
-                                .font(.caption)
-                                .foregroundColor(.secondary) :
-                            Text("")
-                        ) +
-                        Text(result.confirmedText)
-                            .font(.headline)
-                            .fontWeight(.bold) +
-                        Text(result.confirmedText.isEmpty || result.hypothesisText.isEmpty ? "" : " ") +
-                        Text(result.hypothesisText)
-                            .font(.headline)
-                            .foregroundColor(.gray)
+                        Text(confirmedAttributed) +
+                        (needsSpacer ? Text(" ") : Text("")) +
+                        Text(hypothesisAttributed)
                     )
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .id("bottom")
                 }
-                .onChange(of: result.confirmedText) {
+                .onChange(of: result.confirmedSegments) { _, _ in
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
                 // Avoid animating on every hypothesis token; keep scroll position but don't animate
-                .onChange(of: result.hypothesisText) {
+                .onChange(of: result.hypothesisSegments) { _, _ in
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
@@ -74,14 +107,32 @@ struct StreamResultLine: View {
 }
 
 #Preview("StreamResultLine Sample") {
+    let gunmanWord = WordTiming(word: "gunman", tokens: [], start: 0.0, end: 0.2, probability: 0.95)
+    let victimWord = WordTiming(word: "victim", tokens: [], start: 0.3, end: 0.5, probability: 0.92)
+    let corneredWord = WordTiming(word: "cornered", tokens: [], start: 0.6, end: 0.8, probability: 0.9)
+    let confirmedSegment = TranscriptionSegment(text: "The gunman kept his victim", words: [
+        WordTiming(word: "The", tokens: [], start: 0, end: 0.1, probability: 0.9),
+        gunmanWord,
+        WordTiming(word: "kept", tokens: [], start: 0.2, end: 0.3, probability: 0.9),
+        WordTiming(word: "his", tokens: [], start: 0.3, end: 0.35, probability: 0.9),
+        victimWord
+    ])
+    let hypothesisSegment = TranscriptionSegment(text: "cornered at gunpoint…", words: [
+        corneredWord,
+        WordTiming(word: "at", tokens: [], start: 0.8, end: 0.85, probability: 0.9),
+        WordTiming(word: "gunpoint…", tokens: [], start: 0.85, end: 0.95, probability: 0.9)
+    ])
     let sampleResult = StreamViewModel.StreamResult(
         title: "Audio Stream #1",
-        confirmedText: "The gunman kept his victim",
-        hypothesisText: "cornered at gunpoint…",
+        confirmedSegments: [confirmedSegment],
+        hypothesisSegments: [hypothesisSegment],
+        customVocabularyResults: [
+            gunmanWord: [gunmanWord],
+            victimWord: [victimWord],
+            corneredWord: [corneredWord]
+        ],
         streamEndSeconds: 12.3,
-        bufferEnergy: (0..<350).map { _ in Float.random(in: 0...1) },
-        bufferSeconds: 2.5,
-        transcribeResult: nil
+        bufferEnergy: (0..<350).map { _ in Float.random(in: 0...1) }
     )
     StreamResultLine(result: sampleResult)
         .padding()
@@ -106,8 +157,7 @@ struct StreamResultLine: View {
 struct StreamResultView: View {
     @EnvironmentObject var streamViewModel: StreamViewModel
     @AppStorage("enableTimestamps") private var enableTimestamps: Bool = true
-    @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let device = streamViewModel.deviceResult {
@@ -150,11 +200,44 @@ struct StreamResultView: View {
     #endif
 
     // 2. Create two sample result objects with different data
-    let longText = "This is a much longer text block designed to test the scrolling behavior within the StreamResultLine. When content overflows its allocated space, a scrollbar should appear, allowing the user to see all of the text. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur."
+    let highlightedWord = WordTiming(word: "highlighted", tokens: [], start: 0.0, end: 0.2, probability: 0.95)
+    let sampleSegments = [
+        TranscriptionSegment(
+            text: "This is a much longer text block designed to test the scrolling behavior.",
+            words: [
+                WordTiming(word: "This", tokens: [], start: 0, end: 0.1, probability: 0.9),
+                WordTiming(word: "is", tokens: [], start: 0.1, end: 0.15, probability: 0.9),
+                WordTiming(word: "a", tokens: [], start: 0.15, end: 0.17, probability: 0.9),
+                WordTiming(word: "much", tokens: [], start: 0.17, end: 0.2, probability: 0.9),
+                highlightedWord,
+                WordTiming(word: "text", tokens: [], start: 0.25, end: 0.3, probability: 0.9),
+                WordTiming(word: "block", tokens: [], start: 0.3, end: 0.35, probability: 0.9),
+                WordTiming(word: "designed", tokens: [], start: 0.35, end: 0.4, probability: 0.9),
+                WordTiming(word: "to", tokens: [], start: 0.4, end: 0.45, probability: 0.9),
+                WordTiming(word: "test", tokens: [], start: 0.45, end: 0.5, probability: 0.9),
+                WordTiming(word: "the", tokens: [], start: 0.5, end: 0.55, probability: 0.9),
+                WordTiming(word: "scrolling", tokens: [], start: 0.55, end: 0.6, probability: 0.9),
+                WordTiming(word: "behavior.", tokens: [], start: 0.6, end: 0.65, probability: 0.9)
+            ]
+        )
+    ]
+    let sampleHypothesis = [
+        TranscriptionSegment(
+            text: "It seems to be working...",
+            words: [
+                WordTiming(word: "It", tokens: [], start: 0, end: 0.05, probability: 0.9),
+                WordTiming(word: "seems", tokens: [], start: 0.05, end: 0.1, probability: 0.9),
+                WordTiming(word: "to", tokens: [], start: 0.1, end: 0.15, probability: 0.9),
+                WordTiming(word: "be", tokens: [], start: 0.15, end: 0.2, probability: 0.9),
+                WordTiming(word: "working...", tokens: [], start: 0.2, end: 0.25, probability: 0.9)
+            ]
+        )
+    ]
     let result1 = StreamViewModel.StreamResult(
         title: "Device: Your microphone",
-        confirmedText: longText,
-        hypothesisText: "It seems to be working...",
+        confirmedSegments: sampleSegments,
+        hypothesisSegments: sampleHypothesis,
+        customVocabularyResults: [highlightedWord: [highlightedWord]],
         streamEndSeconds: 15.8,
         bufferEnergy: (0..<200).map { _ in Float.random(in: 0...1) }
     )
@@ -162,8 +245,9 @@ struct StreamResultView: View {
     #if os(macOS)
     let result2 = StreamViewModel.StreamResult(
         title: "System: YouTube app",
-        confirmedText: "This is the second audio stream from a different process. ",
-        hypothesisText: "There is no energy data available for this stream yet.",
+        confirmedSegments: sampleSegments,
+        hypothesisSegments: [],
+        customVocabularyResults: [:],
         streamEndSeconds: 22.1
     )
     #endif
