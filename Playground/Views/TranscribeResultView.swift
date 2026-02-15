@@ -38,6 +38,8 @@ struct TranscribeResultView: View {
     @EnvironmentObject private var sdkCoordinator: ArgmaxSDKCoordinator
     @EnvironmentObject private var transcribeViewModel: TranscribeViewModel
     
+    @State private var progressFraction: Double = 0
+
     
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -178,10 +180,21 @@ struct TranscribeResultView: View {
            whisperKit.progress.fractionCompleted < 1
         {
             HStack {
-                ProgressView(whisperKit.progress)
+                ProgressView(value: progressFraction, total: 1)
                     .progressViewStyle(.linear)
                     .labelsHidden()
                     .padding(.horizontal)
+                    .onAppear {
+                        progressFraction = whisperKit.progress.fractionCompleted
+                    }
+                    .onChange(of: whisperKit.progress.fractionCompleted) { oldValue, newValue in
+                        if oldValue > 0, newValue == 0 {
+                            // Allow progress to complete when cancelled or reset
+                            progressFraction = 1.0
+                        } else {
+                            progressFraction = newValue
+                        }
+                    }
                 
                 Button {
                     transcribeViewModel.transcribeTask?.cancel()

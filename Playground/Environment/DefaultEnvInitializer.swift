@@ -56,7 +56,8 @@ public class DefaultEnvInitializer: PlaygroundEnvInitializer {
 
     public func createAPIKeyProvider() -> APIKeyProvider {
         return PlainTextAPIKeyProvider(
-            apiKey: "" // TODO: Add your WhisperKitPro API key here
+            apiKey: "", // TODO: Add your Argmax Pro API key here (required)
+            huggingFaceToken: "" // TODO: Add your Hugging Face token here (optional)
         )
     }
 

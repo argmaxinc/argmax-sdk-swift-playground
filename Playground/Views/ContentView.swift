@@ -2236,7 +2236,11 @@ struct ContentView: View {
                 case .alwaysOn:
                     streamMode = .alwaysOn
                 case .voiceTriggered:
-                    streamMode = .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength), minProcessInterval: Float(minProcessInterval))
+                    streamMode = .voiceTriggered(
+                        silenceThreshold: Float(silenceThreshold),
+                        maxBufferLength: Float(maxSilenceBufferLength),
+                        minProcessInterval: Float(minProcessInterval)
+                    )
                 case .batteryOptimized:
                     streamMode = .batteryOptimized
                 }
