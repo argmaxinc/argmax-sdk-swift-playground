@@ -67,7 +67,7 @@ struct CustomVocabularySheet: View {
                     .onAppear {
                         DispatchQueue.main.async { textEditorFocused = true }
                     }
-                    .onChange(of: isEditing) { editing in
+                    .onChange(of: isEditing) { _, editing in
                         if editing {
                             DispatchQueue.main.async { textEditorFocused = true }
                         } else {

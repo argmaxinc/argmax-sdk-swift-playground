@@ -770,7 +770,7 @@
 			repositoryURL = "argmaxinc.argmax-sdk-swift-alpha";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.9.6;
+				minimumVersion = 1.11.3;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

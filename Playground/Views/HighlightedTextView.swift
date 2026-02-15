@@ -112,6 +112,7 @@ struct HighlightedTextView: View {
     ) {
         guard let firstCharacter = nextText.first else { return }
         guard !firstCharacter.isWhitespace else { return }
+        guard !firstCharacter.isPunctuation else { return }
         guard let lastCharacter = attributedString.characters.last else { return }
         guard !lastCharacter.isWhitespace else { return }
         
