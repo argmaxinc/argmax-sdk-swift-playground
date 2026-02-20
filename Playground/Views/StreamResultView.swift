@@ -75,10 +75,9 @@ struct StreamResultLine: View {
                         isBold: false,
                         color: .gray
                     )
-                    let needsSpacer = !confirmedAttributed.characters.isEmpty && !hypothesisAttributed.characters.isEmpty
+
                     (
                         Text(confirmedAttributed) +
-                        (needsSpacer ? Text(" ") : Text("")) +
                         Text(hypothesisAttributed)
                     )
                     .multilineTextAlignment(.leading)

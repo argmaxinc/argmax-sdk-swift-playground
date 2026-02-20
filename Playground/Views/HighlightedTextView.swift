@@ -60,12 +60,6 @@ struct HighlightedTextView: View {
         if words.isEmpty {
             let fallbackText = segments.map(\.text).joined(separator: " ")
             if !fallbackText.isEmpty {
-                appendSpacerIfNeeded(
-                    nextText: fallbackText,
-                    to: &attributedString,
-                    font: font,
-                    foregroundColor: foregroundColor
-                )
                 var fallback = AttributedString(fallbackText)
                 fallback.font = font
                 fallback.foregroundColor = foregroundColor
@@ -79,13 +73,6 @@ struct HighlightedTextView: View {
         for wordTiming in words {
             let wordText = wordTiming.word
             guard !wordText.isEmpty else { continue }
-            
-            appendSpacerIfNeeded(
-                nextText: wordText,
-                to: &attributedString,
-                font: font,
-                foregroundColor: foregroundColor
-            )
             
             var wordAttributed = AttributedString(wordText)
             
@@ -102,23 +89,6 @@ struct HighlightedTextView: View {
         }
         
         return attributedString
-    }
-    
-    private static func appendSpacerIfNeeded(
-        nextText: String,
-        to attributedString: inout AttributedString,
-        font: Font,
-        foregroundColor: Color
-    ) {
-        guard let firstCharacter = nextText.first else { return }
-        guard !firstCharacter.isWhitespace else { return }
-        guard let lastCharacter = attributedString.characters.last else { return }
-        guard !lastCharacter.isWhitespace else { return }
-        
-        var spacer = AttributedString(" ")
-        spacer.font = font
-        spacer.foregroundColor = foregroundColor
-        attributedString.append(spacer)
     }
 }
 

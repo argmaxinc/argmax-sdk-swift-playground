@@ -95,7 +95,7 @@ struct ContentView: View {
     // MARK: DiarizationOptions
     @AppStorage("minNumOfSpeakers") private var storedMinNumOfSpeakers: Int = -1
     @AppStorage("minActiveOffset") private var storedMinActiveOffset: Double = -1.0
-    @AppStorage("speakerInfoStrategyRaw") private var speakerInfoStrategyRaw: String = "segment"
+    @AppStorage("speakerInfoStrategyRaw") private var speakerInfoStrategyRaw: String = "subsegment"
     @AppStorage("clustererVersionRaw") private var clustererVersionRaw: String = ClustererVersion.pyannote4.description
     @AppStorage("useExclusiveReconciliation") private var useExclusiveReconciliation: Bool = true
     
@@ -110,8 +110,8 @@ struct ContentView: View {
     }
 
     private var speakerInfoStrategy: SpeakerInfoStrategy {
-        get { SpeakerInfoStrategy(from: speakerInfoStrategyRaw) ?? .segment }
-        set { speakerInfoStrategyRaw = newValue == .word ? "word" : "segment" }
+        get { SpeakerInfoStrategy(from: speakerInfoStrategyRaw) ?? .subsegment }
+        set { speakerInfoStrategyRaw = newValue.stringValue }
     }
 
     private var clustererVersion: ClustererVersion {
@@ -1608,40 +1608,43 @@ struct ContentView: View {
                     Spacer()
                     InfoButton("When enabled, ensures that speech from different speakers does not overlap in the diarization output.")
                 }
+
+                HStack {
+                    Text("Speaker Info Strategy")
+                    InfoButton("Select the strategy for assigning speaker info: 'word' for word-level, 'segment' for segment-level, 'subsegment' for subsegment-level.")
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { self.speakerInfoStrategy },
+                        set: { newValue in
+                            self.speakerInfoStrategyRaw = newValue.stringValue
+                        }
+                    )) {
+                        ForEach(SpeakerInfoStrategy.allCases, id: \.stringValue) { strategy in
+                            Text(strategy.displayName).tag(strategy)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                }
                 
+                if speakerInfoStrategy == .word {
                     VStack {
                         Text("Minimum Gap Between Speakers")
                         HStack {
                             Slider(
                                 value: Binding(
                                     get: { minActiveOffset ?? 0 },
-                                set: { newValue in
-                                    storedMinActiveOffset = newValue == 0 ? -1.0 : newValue
-                                }
+                                    set: { newValue in
+                                        storedMinActiveOffset = newValue == 0 ? -1.0 : newValue
+                                    }
                                 ),
                                 in: 0...5,
                                 step: 0.1
                             )
                             Text(minActiveOffset == nil || minActiveOffset == 0 ? "Auto" : String(format: "%.1fs", minActiveOffset ?? 0))
-                            .frame(width: 45)
-                        InfoButton("Controls the minimum time gap in seconds between speaker segments. Higher values will combine nearby segments from the same speaker.")
+                                .frame(width: 45)
+                            InfoButton("Controls the minimum time gap in seconds between speaker segments. Higher values will combine nearby segments from the same speaker.")
+                        }
                     }
-                }
-
-                    HStack {
-                        Text("Speaker Info Strategy")
-                        InfoButton("Select the strategy for assigning speaker info: 'word' for word-level, 'segment' for segment-level.")
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { speakerInfoStrategy },
-                            set: { newStrategy in
-                                speakerInfoStrategyRaw = newStrategy == .word ? "word" : "segment"
-                            }
-                        )) {
-                        Text("Word").tag(SpeakerInfoStrategy.word)
-                        Text("Segment").tag(SpeakerInfoStrategy.segment)
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
                 }
             }
             Section(header: Text("Experimental")) {
@@ -1966,7 +1969,7 @@ struct ContentView: View {
 
                 if shouldEnableCustomVocabulary && !vocabularySnapshot.isEmpty {
                     do {
-                        try await sdkCoordinator.updateCustomVocabulary(words: vocabularySnapshot)
+                        try sdkCoordinator.updateCustomVocabulary(words: vocabularySnapshot)
                     } catch {
                         Logging.error("Failed to update custom vocabulary after model load: \(error)")
                         await MainActor.run {
@@ -2233,7 +2236,11 @@ struct ContentView: View {
                 case .alwaysOn:
                     streamMode = .alwaysOn
                 case .voiceTriggered:
-                    streamMode = .voiceTriggered(silenceThreshold: Float(silenceThreshold), maxBufferLength: Float(maxSilenceBufferLength), minProcessInterval: Float(minProcessInterval))
+                    streamMode = .voiceTriggered(
+                        silenceThreshold: Float(silenceThreshold),
+                        maxBufferLength: Float(maxSilenceBufferLength),
+                        minProcessInterval: Float(minProcessInterval)
+                    )
                 case .batteryOptimized:
                     streamMode = .batteryOptimized
                 }
@@ -2563,6 +2570,38 @@ extension Color {
             blue: Double(b) / 255,
             opacity: Double(a) / 255
         )
+    }
+}
+
+extension SpeakerInfoStrategy {
+    static var allCases: [SpeakerInfoStrategy] {
+        [.word, .segment, .subsegment]
+    }
+    
+    var stringValue: String {
+        switch self {
+        case .word:
+            return "word"
+        case .segment:
+            return "segment"
+        case .subsegment:
+            return "subsegment"
+        @unknown default:
+            return "subsegment"
+        }
+    }
+    
+    var displayName: String {
+        switch self {
+        case .word:
+            return "Word"
+        case .segment:
+            return "Segment"
+        case .subsegment:
+            return "Subsegment"
+        @unknown default:
+            return "Unknown"
+        }
     }
 }
 
