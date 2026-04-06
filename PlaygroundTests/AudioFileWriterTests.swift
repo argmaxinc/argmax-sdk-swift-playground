@@ -25,11 +25,7 @@ final class AudioFileWriterTests: XCTestCase {
         let halfSecondOfSamples = [Float](repeating: 0.1, count: 8000)
         writer.append(samples: halfSecondOfSamples)
 
-        // Allow time for async queue
-        let expectation = expectation(description: "Wait for write")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { expectation.fulfill() }
-        waitForExpectations(timeout: 1)
-
+        // duration uses queue.sync internally, which serializes after the async append
         let duration = writer.duration
         XCTAssertGreaterThan(duration, 0.4, "Duration should be approximately 0.5s")
         XCTAssertLessThan(duration, 0.6, "Duration should be approximately 0.5s")

@@ -337,8 +337,8 @@ struct StreamTabView: View {
 
     private func updateStats(transcription: TranscriptionResultPro) {
         tokensPerSecond = transcription.timings.tokensPerSecond
-        currentEncodingLoops += Int(transcription.timings.totalEncodingRuns)
-        currentDecodingLoops += Int(transcription.timings.totalDecodingLoops)
+        currentEncodingLoops = Int(transcription.timings.totalEncodingRuns)
+        currentDecodingLoops = Int(transcription.timings.totalDecodingLoops)
         bufferSeconds = transcription.timings.inputAudioSeconds
     }
 

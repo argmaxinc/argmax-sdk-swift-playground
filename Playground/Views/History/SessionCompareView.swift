@@ -64,7 +64,7 @@ struct SessionCompareView: View {
 
                 if let lt = left.transcriptionTimings, let rt = right.transcriptionTimings {
                     timingDiffRow("tok/s", left: lt.tokensPerSecond, right: rt.tokensPerSecond, higherIsBetter: true)
-                    timingDiffRow("RTF", left: lt.realTimeFactor, right: rt.realTimeFactor, higherIsBetter: true)
+                    timingDiffRow("RTF", left: lt.realTimeFactor, right: rt.realTimeFactor, higherIsBetter: false)
                     timingDiffRow("Speed", left: lt.speedFactor, right: rt.speedFactor, higherIsBetter: true)
                     timingDiffRow("Audio Proc (ms)", left: lt.audioProcessing * 1000, right: rt.audioProcessing * 1000, higherIsBetter: false)
                     timingDiffRow("Encoding (ms)", left: lt.encoding * 1000, right: rt.encoding * 1000, higherIsBetter: false)

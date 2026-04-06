@@ -100,24 +100,6 @@ struct AudioPlaybackView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            WaveformOverview(
-                samples: [],
-                currentTime: player.currentTime,
-                duration: max(player.duration, 0.01)
-            )
-            .overlay(
-                GeometryReader { geo in
-                    Color.clear.gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                guard player.duration > 0, geo.size.width > 0 else { return }
-                                let fraction = max(0, min(1, value.location.x / geo.size.width))
-                                player.seek(to: Double(fraction) * player.duration)
-                            }
-                    )
-                }
-            )
-
             HStack(spacing: 24) {
                 Button {
                     player.seek(to: max(0, player.currentTime - 5))

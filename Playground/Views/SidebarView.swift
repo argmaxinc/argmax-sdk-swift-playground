@@ -95,7 +95,7 @@ struct SidebarView: View {
                 }
                 Spacer()
                 HStack(spacing: 4) {
-                    Link(destination: URL(string: "http://argmaxinc.com/#SDK")!) {
+                    Link(destination: URL(string: "https://argmaxinc.com/#SDK")!) {
                         Image(systemName: "info.circle")
                             .font(.footnote)
                             .foregroundColor(.blue)
