@@ -129,8 +129,7 @@ class AudioProcessDiscoverer: ObservableObject {
                 }
             }
 
-            // Publish on the main queue so SwiftUI observers get notified safely.
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 
                 self.activeAudioProcessList = newProcessList
@@ -140,12 +139,10 @@ class AudioProcessDiscoverer: ObservableObject {
                 if currentSelection != .noAudio {
                     let stillExists = newProcessList.contains { $0.id == currentSelection.id }
                     if !stillExists {
-                        // Process no longer exists, but don't auto-reset to avoid triggering handleSelectedProcessChange
                         Logging.debug("Selected process \(currentSelection.name) no longer exists, keeping selection")
                     }
                 }
                 
-                // Mark refresh as complete
                 self.isRefreshInProgress = false
             }
         }

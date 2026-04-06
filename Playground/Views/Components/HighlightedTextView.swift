@@ -1,9 +1,22 @@
 import SwiftUI
 import Argmax
 
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
+
 /// A SwiftUI view that displays text with highlighted words matching a custom vocabulary.
 /// Words whose `WordTiming` appears as a key in the vocabulary results are rendered bold blue.
-struct HighlightedTextView: View {
+struct HighlightedTextView: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.prefixText == rhs.prefixText &&
+        lhs.segments == rhs.segments &&
+        lhs.customVocabularyResults == rhs.customVocabularyResults &&
+        lhs.font == rhs.font &&
+        lhs.foregroundColor == rhs.foregroundColor
+    }
     let prefixText: String
     let segments: [TranscriptionSegment]
     let customVocabularyResults: VocabularyResults
@@ -25,16 +38,15 @@ struct HighlightedTextView: View {
     }
     
     var body: some View {
-        Text(
-            Self.createHighlightedAttributedString(
-                prefixText: prefixText,
-                segments: segments,
-                customVocabularyResults: customVocabularyResults,
-                font: font,
-                foregroundColor: foregroundColor
-            )
-        )
+        Text(Self.createHighlightedAttributedString(
+            prefixText: prefixText,
+            segments: segments,
+            customVocabularyResults: customVocabularyResults,
+            font: font,
+            foregroundColor: foregroundColor
+        ))
     }
+
     
     /// Creates an AttributedString with custom vocabulary words highlighted in bold blue.
     /// - Parameters:
@@ -44,7 +56,7 @@ struct HighlightedTextView: View {
     ///   - font: Base font to use.
     ///   - foregroundColor: Base foreground color.
     /// - Returns: AttributedString with highlighted vocabulary words.
-    static func createHighlightedAttributedString(
+    @MainActor static func createHighlightedAttributedString(
         prefixText: String = "",
         segments: [TranscriptionSegment] = [],
         customVocabularyResults: VocabularyResults = [:],
@@ -74,6 +86,13 @@ struct HighlightedTextView: View {
             let wordText = wordTiming.word
             guard !wordText.isEmpty else { continue }
             
+            appendSpacerIfNeeded(
+                nextText: wordText,
+                to: &attributedString,
+                font: font,
+                foregroundColor: foregroundColor
+            )
+            
             var wordAttributed = AttributedString(wordText)
             
             if highlightKeys.contains(where: { highlightedWordTiming in
@@ -88,7 +107,40 @@ struct HighlightedTextView: View {
             attributedString.append(wordAttributed)
         }
         
-        return attributedString
+        // Disable CoreText hyphenation to avoid expensive CFStringGetHyphenationLocationBeforeIndex
+        // calls during layout measurement. Without this, the system locale enables hyphenation
+        // by default, causing significant overhead every time the scroll view re-measures text.
+        let platform = Self.makePlatformAttributed(attributedString)
+        return (try? AttributedString(platform, including: \.swiftUI)) ?? attributedString
+    }
+
+    /// Converts an `AttributedString` to an `NSAttributedString` with hyphenation disabled.
+    @MainActor
+    static func makePlatformAttributed(_ base: AttributedString) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: NSAttributedString(base))
+        let noHyphen = NSMutableParagraphStyle()
+        noHyphen.hyphenationFactor = 0.0
+        mutable.addAttribute(.paragraphStyle, value: noHyphen,
+                             range: NSRange(location: 0, length: mutable.length))
+        return mutable
+    }
+    
+    private static func appendSpacerIfNeeded(
+        nextText: String,
+        to attributedString: inout AttributedString,
+        font: Font,
+        foregroundColor: Color
+    ) {
+        guard let firstCharacter = nextText.first else { return }
+        guard !firstCharacter.isWhitespace else { return }
+        guard !firstCharacter.isPunctuation else { return }
+        guard let lastCharacter = attributedString.characters.last else { return }
+        guard !lastCharacter.isWhitespace else { return }
+        
+        var spacer = AttributedString(" ")
+        spacer.font = font
+        spacer.foregroundColor = foregroundColor
+        attributedString.append(spacer)
     }
 }
 

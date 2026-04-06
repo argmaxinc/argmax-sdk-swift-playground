@@ -25,7 +25,7 @@ import Charts
 /// the threshold for voice activity detection and color coding.
 struct VoiceEnergyView: View {
     let bufferEnergy: [Float]
-    @AppStorage("silenceThreshold") private var silenceThreshold: Double = 0.2
+    @EnvironmentObject private var settings: AppSettings
     
     /// Data structure for Chart energy values
     private struct EnergyData: Identifiable {
@@ -59,7 +59,7 @@ struct VoiceEnergyView: View {
                             width: 2
                         )
                         .cornerRadius(1)
-                        .foregroundStyle(energyData.value > Float(silenceThreshold) ? .green : .red)
+                        .foregroundStyle(energyData.value > Float(settings.silenceThreshold) ? .green : .red)
                     }
                     .chartXAxis(.hidden)
                     .chartYAxis(.hidden)
@@ -90,7 +90,7 @@ struct VoiceEnergyView: View {
                         width: 2
                     )
                     .cornerRadius(1)
-                    .foregroundStyle(energyData.value > Float(silenceThreshold) ? .green : .red)
+                    .foregroundStyle(energyData.value > Float(settings.silenceThreshold) ? .green : .red)
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
@@ -111,8 +111,6 @@ struct VoiceEnergyView: View {
 #Preview {
     let sampleEnergy: [Float] = (0..<400).map { _ in Float.random(in: 0...1) }
     VoiceEnergyView(bufferEnergy: sampleEnergy)
+        .environmentObject(AppSettings())
         .padding()
-        .onAppear() {
-            UserDefaults.standard.set(0.9, forKey: "silenceThreshold")
-        }
 }

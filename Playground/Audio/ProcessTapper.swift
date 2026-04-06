@@ -64,6 +64,38 @@ public final class ProcessTapper {
     private var converter: AVAudioConverter?
     
     private var currentCallback: AudioBufferCallback?
+    // Accumulates resampled samples until we have a full chunk to match AudioProcessor.minBufferLength
+    private var sampleAccumulator: [Float] = []
+    private var accumulatorHead: Int = 0
+    private let targetChunkSize = 1600 // 100ms at 16kHz, matches AudioProcessor.minBufferLength
+
+    /// Resample a single hardware-rate PCM buffer to the desired format using the converter
+    /// in streaming mode. Unlike AudioProcessor.resampleBuffer, the inputBlock signals
+    /// `.noDataNow` (not `.endOfStream`) after providing the buffer once, so the converter
+    /// preserves its sinc-filter state across successive IO callbacks without injecting
+    /// phantom duplicate frames.
+    private func resampleChunk(_ pcm: AVAudioPCMBuffer) -> [Float]? {
+        guard let conv = converter else { return nil }
+        let ratio = desiredFormat.sampleRate / pcm.format.sampleRate
+        let outputFrameCount = max(1, AVAudioFrameCount((Double(pcm.frameLength) * ratio).rounded(.up)))
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: desiredFormat, frameCapacity: outputFrameCount) else {
+            return nil
+        }
+        var didProvide = false
+        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+            if didProvide {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            didProvide = true
+            outStatus.pointee = .haveData
+            return pcm
+        }
+        var error: NSError?
+        let status = conv.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+        guard status != .error else { return nil }
+        return AudioProcessor.convertBufferToArray(buffer: outputBuffer)
+    }
 
     private lazy var ioBlock: AudioDeviceIOBlock = { [weak self] _, inBuf, _, _, _ in
         guard let self,
@@ -72,16 +104,27 @@ public final class ProcessTapper {
                                           bufferListNoCopy: inBuf,
                                           deallocator: nil)
         else { return }
-        
-        var floats: [Float]
-        if let conv = self.converter,
-           !fmt.sampleRate.isEqual(to: self.desiredFormat.sampleRate),
-           let resampled = try? AudioProcessor.resampleBuffer(pcm, with: conv) {
-            floats = AudioProcessor.convertBufferToArray(buffer: resampled)
+
+        let floats: [Float]
+        if !fmt.sampleRate.isEqual(to: self.desiredFormat.sampleRate),
+           let resampled = self.resampleChunk(pcm) {
+            floats = resampled
         } else {
             floats = AudioProcessor.convertBufferToArray(buffer: pcm)
         }
-        self.currentCallback?(floats)
+
+        // Accumulate samples and yield only when we have a full chunk (matches AudioProcessor.minBufferLength)
+        self.sampleAccumulator.append(contentsOf: floats)
+        while self.sampleAccumulator.count - self.accumulatorHead >= self.targetChunkSize {
+            let start = self.accumulatorHead
+            let chunk = Array(self.sampleAccumulator[start ..< start + self.targetChunkSize])
+            self.accumulatorHead += self.targetChunkSize
+            self.currentCallback?(chunk)
+        }
+        if self.accumulatorHead > 0 {
+            self.sampleAccumulator.removeFirst(self.accumulatorHead)
+            self.accumulatorHead = 0
+        }
     }
 
     private func createIOProcOnce() throws {
@@ -233,10 +276,14 @@ public final class ProcessTapper {
     /// ```
     public func stop() throws {
         guard isRunning else { return }
-        
+        do {
+            try pause()
+        } catch {
+            Logging.error("Failed to pause ProcessTapper: \(error)")
+        }
+
         // Stop audio device
         if aggregateDeviceID != kAudioObjectUnknown {
-            try pause()
             // Destroy IO proc
             if let deviceProcID {
                 let err = AudioDeviceDestroyIOProcID(aggregateDeviceID, deviceProcID)
@@ -273,6 +320,8 @@ public final class ProcessTapper {
             throw ProcessTapperError.operationFailed
         }
         converter?.reset()
+        sampleAccumulator.removeAll()
+        accumulatorHead = 0
         isRunning = false
     }
     
@@ -323,7 +372,7 @@ public final class ProcessTapper {
         }
         
         audioFormat = format
-        
+
         guard let converter = AVAudioConverter(from: format, to: desiredFormat) else {
             throw ProcessTapperError.setupFailed
         }
