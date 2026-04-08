@@ -57,11 +57,8 @@ struct CustomVocabularySheet: View {
                 TextEditor(text: $input)
                     .font(.body)
                     .frame(minHeight: 200)
-                    #if os(macOS)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    #else
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    #endif
+                    .scrollContentBackground(.hidden)
+                    .background(Color.secondary.opacity(0.1))
                     .cornerRadius(8)
                     .focused($textEditorFocused)
                     .onAppear {
@@ -100,6 +97,8 @@ struct CustomVocabularySheet: View {
                 }
             }
 
+            Spacer()
+
             HStack(spacing: 12) {
                 if isEditingMode {
                     Button("Cancel") {
@@ -107,40 +106,38 @@ struct CustomVocabularySheet: View {
                         isEditing = hasExistingVocabulary ? false : true
                         textEditorFocused = false
                     }
-                    .buttonStyle(.bordered)
+                    .glassSecondaryButtonStyle()
                     .frame(maxWidth: .infinity)
 
                     Button("Save") {
                         let newWords = parseCustomVocabulary(input)
-                        let previousWords = words
                         words = newWords
                         input = newWords.joined(separator: "\n")
                         isPresented = false
                         isEditing = newWords.isEmpty ? true : false
                         textEditorFocused = false
 
+                        guard canUpdateVocabulary() else { return }
+
                         Task {
                             do {
                                 try sdkCoordinator.updateCustomVocabulary(words: newWords)
                             } catch {
                                 await MainActor.run {
-                                    words = previousWords
-                                    input = previousWords.joined(separator: "\n")
-                                    isEditing = previousWords.isEmpty ? true : false
-                                    let message = error.localizedDescription.isEmpty ? "Unable to update custom vocabulary." : error.localizedDescription
+                                    let message = error.localizedDescription.isEmpty ? "Vocabulary saved but could not be applied to the running model. It will take effect on next model load." : error.localizedDescription
                                     onError(message)
                                 }
                             }
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .glassProminentButtonStyle()
                     .frame(maxWidth: .infinity)
                 } else {
-                    Button("Close") {
+                    Button("Done") {
                         isPresented = false
                         isEditing = false
                     }
-                    .buttonStyle(.bordered)
+                    .glassProminentButtonStyle()
                     .frame(maxWidth: .infinity)
                 }
             }

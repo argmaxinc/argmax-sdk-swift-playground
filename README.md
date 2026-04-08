@@ -36,7 +36,7 @@ In order to unlock the SDK, you will need to provide your API key. You can creat
 In `DefaultEnvInitializer.swift`, update the following code with your credentials:
 
 ```swift
-public class DefaultEnvInitializer: PlaygroundEnvInitializer {
+class DefaultEnvInitializer: PlaygroundEnvInitializer {
 
     public func createAPIKeyProvider() -> APIKeyProvider {
         return PlainTextAPIKeyProvider(

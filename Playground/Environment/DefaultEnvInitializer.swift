@@ -52,7 +52,7 @@ import ArgmaxSecrets
 /// let coordinator = ArgmaxSDKCoordinator(keyProvider: envInitializer.createAPIKeyProvider())
 /// let logger = envInitializer.createAnalyticsLogger()
 /// ```
-public class DefaultEnvInitializer: PlaygroundEnvInitializer {
+class DefaultEnvInitializer: PlaygroundEnvInitializer {
 
     public func createAPIKeyProvider() -> APIKeyProvider {
         return PlainTextAPIKeyProvider(

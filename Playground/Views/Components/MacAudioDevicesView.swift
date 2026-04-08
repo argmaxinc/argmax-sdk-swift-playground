@@ -31,13 +31,14 @@ struct MacAudioDevicesView: View {
     
     var body: some View {
         if multiDeviceMode {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
                 // Device section
                 if !audioDeviceDiscoverer.audioDevices.isEmpty {
                     HStack {
                         Text("Device:")
-                            .font(.headline)
-                            .frame(width: 80, alignment: .leading)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .frame(width: 56, alignment: .leading)
                         
                         ClickableDropdownPicker(
                             items: audioDeviceDiscoverer.audioDevices,
@@ -51,7 +52,7 @@ struct MacAudioDevicesView: View {
                                 audioDeviceDiscoverer.refreshDevices(selectFirst: false)
                             }
                         )
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: 260)
                         
                         Button(action: { showDeviceHelp = true }) {
                             Image(systemName: "info.circle")
@@ -66,8 +67,9 @@ struct MacAudioDevicesView: View {
                 // Process section
                 HStack {
                     Text("System:")
-                        .font(.headline)
-                        .frame(width: 80, alignment: .leading)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .frame(width: 56, alignment: .leading)
                     ClickableDropdownPicker(
                         items: audioProcessDiscoverer.availableProcessOptions,
                         selection: $audioProcessDiscoverer.selectedProcessForStream,
@@ -77,7 +79,7 @@ struct MacAudioDevicesView: View {
                             audioProcessDiscoverer.refreshProcessList()
                         }
                     )
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 260)
                     
                     Button(action: { showSystemHelp = true }) {
                         Image(systemName: "info.circle")
@@ -96,7 +98,7 @@ struct MacAudioDevicesView: View {
             .alert("System Stream", isPresented: $showSystemHelp) {
                 Button("OK") { }
             } message: {
-                Text("Captures audio from system applications or the entire system.\n\n• No Audio: Disables system audio capture\n• Individual Apps: Captures audio from specific applications that are currently outputting audio (e.g., Spotify playing music, Zoom during a call, Safari playing a video).")
+                Text("Captures audio from system applications or the entire system.\n\n• No Audio: Disables system audio capture\n• Individual Apps: Captures audio from specific applications that are currently outputting audio.")
             }
         } else {
             HStack {

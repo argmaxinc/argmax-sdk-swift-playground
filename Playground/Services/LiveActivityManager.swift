@@ -100,7 +100,7 @@ class LiveActivityManager: ObservableObject {
             
             currentActivity = activity
             startHeartbeat()
-            Logging.error("Live activity started successfully: \(activity.id)")
+            Logging.debug("Live activity started successfully: \(activity.id)")
         } catch {
             Logging.error("Failed to start live activity: \(error)")
             throw error
@@ -176,7 +176,7 @@ class LiveActivityManager: ObservableObject {
     func cleanupOrphanedActivities() async {
         // End any existing activities that might be left over from previous sessions
         for activity in Activity<TranscriptionAttributes>.activities {
-            Logging.error("Cleaning up orphaned activity: \(activity.id)")
+            Logging.debug("Cleaning up orphaned activity: \(activity.id)")
             await activity.end(nil, dismissalPolicy: .immediate)
         }
     }
@@ -217,7 +217,7 @@ class LiveActivityManager: ObservableObject {
             return
         }
         
-        Logging.error("Live Activity heartbeat timeout - auto-dismissing stale activity")
+        Logging.debug("Live Activity heartbeat timeout - auto-dismissing stale activity")
         await stopActivity(dismissalPolicy: .immediate)
     }
     

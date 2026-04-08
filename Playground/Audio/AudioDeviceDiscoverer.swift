@@ -24,7 +24,7 @@ import SwiftUI
 /// let devices = deviceDiscoverer.audioDevices
 /// 
 /// // Get selected device ID for Core Audio
-/// if let deviceID = deviceDiscoverer.selectedDiviceID {
+/// if let deviceID = deviceDiscoverer.selectedDeviceID {
 ///     // Use deviceID for audio recording
 /// }
 /// ```
@@ -40,7 +40,7 @@ class AudioDeviceDiscoverer: ObservableObject {
     }
     #endif
     
-    var selectedDiviceID: DeviceID? {
+    var selectedDeviceID: DeviceID? {
         #if os(macOS)
         if selectedAudioInput == Self.noAudioDevice.name {
             return nil
