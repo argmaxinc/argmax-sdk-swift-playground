@@ -1,39 +1,26 @@
 # Argmax SDK Swift Playground
 
-This repository hosts the source code for [Argmax Playground](https://testflight.apple.com/join/Q1cywTJw). It is open-sourced to demonstrate best practices when using the [Argmax SDK](https://argmaxinc.com/#SDK) through an end-to-end example app. Specifically, this app demonstrates Real-time Transcription, File Transcription and Diarized Transcription.
+This repository hosts the source code for [Argmax Playground for iOS and macOS](https://testflight.apple.com/join/Q1cywTJw).
+
+It is open-sourced to demonstrate best practices when building with [Argmax Pro SDK Swift](https://app.argmaxinc.com/docs) through an end-to-end example app. Specifically, this app demonstrates [Real-time Transcription](https://app.argmaxinc.com/docs/examples/custom-vocabulary) with [Speakers](https://app.argmaxinc.com/docs/examples/real-time-transcription#with-speakers) and [Custom Vocabulary](https://app.argmaxinc.com/docs/examples/custom-vocabulary).
 
 
 ---
 
 ## Getting Started
 
-### 1. Clone the Repository
+### 1. Get Argmax credentials
 
-```bash
-git clone https://github.com/argmaxinc/argmax-sdk-swift-playground.git
-cd argmax-sdk-swift-playground
-```
-
-### 2. Open the Project
-
-```bash
-open Playground.xcodeproj
-```
-
----
+This project requires a secret token and an API key from that you may generate from your [Argmax Dashboard](https://app.argmaxinc.com).
 
 
-## Configuration
+### 2. Follow Installation instructions
 
-Before running the app, you must complete these setup steps:
+Please see [Installation](https://app.argmaxinc.com/docs/guides/upgrading-to-pro-sdk) for details
 
-### 1. Select Development Team
-In Xcode, select your app target and go to **Signing & Capabilities**. Choose your **Development Team** from the dropdown to enable code signing.
+### 3. Set Argmax credentials
 
-### 2. Add Your API Key
-In order to unlock the SDK, you will need to provide your API key. You can create one at [https://app.argmaxinc.com](https://app.argmaxinc.com).
-
-In `DefaultEnvInitializer.swift`, update the following code with your credentials:
+Then, update `DefaultEnvInitializer.swift` with your Argmax API key
 
 ```swift
 class DefaultEnvInitializer: PlaygroundEnvInitializer {
@@ -47,3 +34,9 @@ class DefaultEnvInitializer: PlaygroundEnvInitializer {
 ```
 
 > **Do not commit your API key.**.
+
+---
+
+
+### 4. Select Development Team
+In Xcode, select your app target and go to **Signing & Capabilities**. Choose your **Development Team** from the dropdown to enable code signing.
