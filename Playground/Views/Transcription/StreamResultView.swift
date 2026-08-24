@@ -9,12 +9,14 @@ struct StreamResultLine: View, Equatable {
         lhs.showSpeakerLabels == rhs.showSpeakerLabels &&
         lhs.isDeviceSource == rhs.isDeviceSource &&
         lhs.enableTimestamps == rhs.enableTimestamps &&
-        lhs.autoScroll == rhs.autoScroll
+        lhs.autoScroll == rhs.autoScroll &&
+        lhs.keywordHighlights == rhs.keywordHighlights &&
+        lhs.itnHighlight == rhs.itnHighlight
     }
 
     let result: StreamViewModel.StreamResult
     let showSpeakerLabels: Bool
-    /// True for the device microphone source — causes the waveform to read live energy
+    /// True for the device microphone source -- causes the waveform to read live energy
     /// directly from the ViewModel rather than from `result`, so this view's body is not
     /// invalidated on every energy poll cycle.
     let isDeviceSource: Bool
@@ -23,13 +25,19 @@ struct StreamResultLine: View, Equatable {
     /// equality check, while a bufferEnergy-only poll leaves it unchanged and skips body.
     let enableTimestamps: Bool
     let autoScroll: Bool
+    /// Keyword list for simple case-insensitive highlighting (Qwen custom vocabulary).
+    /// Passed as a stored prop so the equatable guard catches vocabulary changes.
+    let keywordHighlights: [String]
+    let itnHighlight: Bool
 
-    init(result: StreamViewModel.StreamResult, showSpeakerLabels: Bool = false, isDeviceSource: Bool = false, enableTimestamps: Bool = false, autoScroll: Bool = true) {
+    init(result: StreamViewModel.StreamResult, showSpeakerLabels: Bool = false, isDeviceSource: Bool = false, enableTimestamps: Bool = false, autoScroll: Bool = true, keywordHighlights: [String] = [], itnHighlight: Bool = false) {
         self.result = result
         self.showSpeakerLabels = showSpeakerLabels
         self.isDeviceSource = isDeviceSource
         self.enableTimestamps = enableTimestamps
         self.autoScroll = autoScroll
+        self.keywordHighlights = keywordHighlights
+        self.itnHighlight = itnHighlight
     }
 
     /// Isolated sub-view that absorbs @EnvironmentObject invalidations from waveform energy
@@ -42,10 +50,13 @@ struct StreamResultLine: View, Equatable {
         let staticSamples: [Float]
 
         var body: some View {
-            let samples: [Float] = isDeviceSource && !streamViewModel.deviceBufferEnergy.isEmpty
+            // Live energy per source: device from the audio processor, system/process from the
+            // energy passthrough. Falls back to the static snapshot (e.g. finished session).
+            let liveEnergy = isDeviceSource
                 ? streamViewModel.deviceBufferEnergy
-                : staticSamples
-            let isActive = isDeviceSource && !streamViewModel.deviceBufferEnergy.isEmpty
+                : streamViewModel.systemBufferEnergy
+            let samples: [Float] = liveEnergy.isEmpty ? staticSamples : liveEnergy
+            let isActive = !liveEnergy.isEmpty
             if !samples.isEmpty {
                 WaveformView(samples: samples, silenceThreshold: Float(settings.silenceThreshold), isActive: isActive)
             }
@@ -104,6 +115,7 @@ struct StreamResultLine: View, Equatable {
             prefixText: prefix,
             segments: segments,
             customVocabularyResults: customVocabularyResults,
+            keywordHighlights: keywordHighlights,
             font: baseFont,
             foregroundColor: color
         )
@@ -111,7 +123,7 @@ struct StreamResultLine: View, Equatable {
     
     
     private func timestampRange(start: Float, end: Float) -> String {
-        "[\(String(format: "%.2f", start)) → \(String(format: "%.2f", end))]"
+        "[\(String(format: "%.2f", start)) -> \(String(format: "%.2f", end))]"
     }
     
     private func hasContent(in segments: [TranscriptionSegment]) -> Bool {
@@ -140,6 +152,8 @@ struct StreamResultLine: View, Equatable {
         HighlightedTextView(
             segments: [transcriptionSegment],
             customVocabularyResults: result.customVocabularyResults,
+            keywordHighlights: keywordHighlights,
+            itnHighlight: itnHighlight,
             font: isHypothesis ? .headline : .headline.bold(),
             foregroundColor: baseColor
         )
@@ -255,6 +269,8 @@ struct StreamResultLine: View, Equatable {
         HighlightedTextView(
             segments: segments,
             customVocabularyResults: result.customVocabularyResults,
+            keywordHighlights: keywordHighlights,
+            itnHighlight: itnHighlight,
             font: .headline,
             foregroundColor: .secondary
         )
@@ -329,10 +345,10 @@ struct StreamResultLine: View, Equatable {
         WordTiming(word: "his", tokens: [], start: 0.3, end: 0.35, probability: 0.9),
         victimWord
     ])
-    let hypothesisSegment = TranscriptionSegment(text: "cornered at gunpoint…", words: [
+    let hypothesisSegment = TranscriptionSegment(text: "cornered at gunpoint...", words: [
         corneredWord,
         WordTiming(word: "at", tokens: [], start: 0.8, end: 0.85, probability: 0.9),
-        WordTiming(word: "gunpoint…", tokens: [], start: 0.85, end: 0.95, probability: 0.9)
+        WordTiming(word: "gunpoint...", tokens: [], start: 0.85, end: 0.95, probability: 0.9)
     ])
     let sampleResult = StreamViewModel.StreamResult(
         title: "Audio Stream #1",
@@ -378,6 +394,13 @@ struct StreamResultView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            SessionInfoStrip(
+                detectedLanguage: streamViewModel.detectedLanguage,
+                sessionLanguages: streamViewModel.sessionLanguages,
+                itnStatus: settings.itnStatus(detectedLanguage: streamViewModel.detectedLanguage,
+                                              loadedITNEnabled: sdkCoordinator.loadedITNEnabled)
+            )
+
             if selectedMode == .diarize && !sdkCoordinator.isSortformerLoaded {
                 if isRecording && !streamViewModel.deviceBufferEnergy.isEmpty {
                     WaveformView(samples: streamViewModel.deviceBufferEnergy, silenceThreshold: Float(settings.silenceThreshold), isActive: true)
@@ -391,13 +414,16 @@ struct StreamResultView: View {
             }
             
             if selectedMode != .diarize || sdkCoordinator.isSortformerLoaded {
+                let keywords = sdkCoordinator.currentCustomVocabularyWords
                 if let device = streamViewModel.deviceResult {
                     StreamResultLine(
                         result: device,
                         showSpeakerLabels: streamViewModel.enableStreamingDiarization && selectedMode == .diarize,
                         isDeviceSource: true,
                         enableTimestamps: settings.enableTimestamps,
-                        autoScroll: autoScroll
+                        autoScroll: autoScroll,
+                        keywordHighlights: keywords,
+                        itnHighlight: settings.inverseTextNormalization
                     )
                     .equatable()
                 }
@@ -406,14 +432,16 @@ struct StreamResultView: View {
                         result: system,
                         showSpeakerLabels: streamViewModel.enableStreamingDiarization && selectedMode == .diarize,
                         enableTimestamps: settings.enableTimestamps,
-                        autoScroll: autoScroll
+                        autoScroll: autoScroll,
+                        keywordHighlights: keywords,
+                        itnHighlight: settings.inverseTextNormalization
                     )
                     .equatable()
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Disable text selection while recording — same SelectionOverlay / NavigationState.SelectionSeed
+        // Disable text selection while recording -- same SelectionOverlay / NavigationState.SelectionSeed
         // cascade as in TranscribeResultView: hover-tracking fires ~79k times during active processing,
         // cascading into Text Content attribute graph updates for every visible text node.
         .conditionalTextSelection(!isRecording)
@@ -517,17 +545,22 @@ private extension View {
     #if os(macOS)
     streamViewModel.systemResult = result2
     #endif
-    
+
+    // Isolate preview settings from the app's persistent defaults. Previews use an in-memory
+    // `UserDefaults` suite so changes here don't reach `UserDefaults.standard`.
+    let previewDefaults = UserDefaults(suiteName: "preview.streamresult")!
+    previewDefaults.removePersistentDomain(forName: "preview.streamresult")
+    let previewSettings = AppSettings(store: previewDefaults)
+    previewSettings.enableDecoderPreview = false
+    previewSettings.silenceThreshold = 0.2
+
     return StreamResultView(selectedMode: .transcription, isRecording: false, autoScroll: true)
     .environmentObject(streamViewModel)
     #if os(macOS)
     .environmentObject(processDiscoverer)
     #endif
     .environmentObject(deviceDiscoverer)
+    .environmentObject(previewSettings)
     .frame(height: 400)
     .padding()
-    .onAppear() {
-        UserDefaults.standard.set(false, forKey: "enableDecoderPreview")
-        UserDefaults.standard.set(0.2, forKey: "silenceThreshold")
-    }
 }

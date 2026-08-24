@@ -4,7 +4,7 @@ import Argmax
 
 /// In-memory store for session history. Does not persist across app launches.
 @MainActor
-class SessionHistoryManager: ObservableObject {
+final class SessionHistoryManager: ObservableObject {
     @Published var sessions: [SessionRecord] = []
 
     func addSession(_ record: SessionRecord) {
@@ -14,57 +14,66 @@ class SessionHistoryManager: ObservableObject {
     func removeSession(id: UUID) {
         if let index = sessions.firstIndex(where: { $0.id == id }) {
             let session = sessions[index]
-            cleanupAudioFile(session.audioFileURL)
+            cleanupFile(session.audioFileURL)
+            cleanupFile(session.traceFileURL)
             sessions.remove(at: index)
         }
     }
 
     func clearAll() {
         for session in sessions {
-            cleanupAudioFile(session.audioFileURL)
+            cleanupFile(session.audioFileURL)
+            cleanupFile(session.traceFileURL)
         }
         sessions.removeAll()
     }
 
-    private func cleanupAudioFile(_ url: URL?) {
+    private func cleanupFile(_ url: URL?) {
         guard let url else { return }
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// Convenience: build a SessionRecord from AppSettings plus tab-specific data.
-    func saveTranscribeSession(
-        settings: AppSettings,
-        sdkCoordinator: ArgmaxSDKCoordinator,
-        mode: SessionMode,
-        source: String,
-        diarizationMode: String,
-        segments: [TranscriptionSegment],
-        speakerSegments: [SpeakerSegment]?,
-        result: TranscriptionResult?,
-        diarizationTimings: PyannoteDiarizationTimings?,
-        diarizationDurationMs: Double?,
-        audioFileURL: URL?,
-        audioDuration: TimeInterval
-    ) {
-        let snapshot = settings.captureSettings(
-            diarizationMode: diarizationMode,
-            customVocabularyWords: settings.enableCustomVocabulary ? sdkCoordinator.currentCustomVocabularyWords : []
+    /// Tab-specific inputs for a transcribe-mode save. Packaging these as a struct keeps the
+    /// `saveTranscribeSession` signature readable at call sites rather than a 12-positional
+    /// argument list. `customVocabularyWords` is passed in (not pulled from the coordinator) so
+    /// the history manager doesn't need a reference to it.
+    struct TranscribeSessionContext {
+        let settings: AppSettings
+        let mode: SessionMode
+        let source: String
+        let diarizationMode: String
+        let segments: [TranscriptionSegment]
+        let speakerSegments: [SpeakerSegment]?
+        let result: TranscriptionResult?
+        let diarizationTimings: PyannoteDiarizationTimings?
+        let diarizationDurationMs: Double?
+        let audioFileURL: URL?
+        let traceFileURL: URL?
+        let audioDuration: TimeInterval
+        let customVocabularyWords: [String]
+    }
+
+    func saveTranscribeSession(_ context: TranscribeSessionContext) {
+        let snapshot = context.settings.captureSettings(
+            diarizationMode: context.diarizationMode,
+            customVocabularyWords: context.settings.enableCustomVocabulary ? context.customVocabularyWords : []
         )
         let record = SessionRecord(
             id: UUID(),
             timestamp: Date(),
-            mode: mode,
-            sourceDescription: source,
+            mode: context.mode,
+            sourceDescription: context.source,
             settings: snapshot,
-            segments: segments,
-            speakerSegments: speakerSegments,
+            segments: context.segments,
+            speakerSegments: context.speakerSegments,
             wordsWithSpeakers: nil,
-            transcriptionTimings: result?.timings,
-            diarizationTimings: diarizationTimings,
+            transcriptionTimings: context.result?.timings,
+            diarizationTimings: context.diarizationTimings,
             streamingDiarizationTimings: nil,
-            diarizationDurationMs: diarizationDurationMs,
-            audioFileURL: audioFileURL,
-            audioDuration: audioDuration
+            diarizationDurationMs: context.diarizationDurationMs,
+            audioFileURL: context.audioFileURL,
+            traceFileURL: context.traceFileURL,
+            audioDuration: context.audioDuration
         )
         addSession(record)
     }
@@ -75,6 +84,7 @@ class SessionHistoryManager: ObservableObject {
         wordsWithSpeakers: [WordWithSpeaker]?,
         streamingDiarizationTimings: Any?,
         audioFileURL: URL?,
+        traceFileURL: URL? = nil,
         audioDuration: TimeInterval,
         sourceDescription: String = "Live Stream",
         resolvedSortformerMode: String? = nil
@@ -94,6 +104,7 @@ class SessionHistoryManager: ObservableObject {
             streamingDiarizationTimings: streamingDiarizationTimings,
             diarizationDurationMs: nil,
             audioFileURL: audioFileURL,
+            traceFileURL: traceFileURL,
             audioDuration: audioDuration
         )
         addSession(record)

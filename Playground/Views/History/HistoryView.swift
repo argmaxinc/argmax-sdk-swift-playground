@@ -101,17 +101,21 @@ struct HistoryView: View {
 
             List {
                 ForEach(sessionHistory.sessions) { session in
-                    sessionRow(session)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if compareMode {
-                                toggleCompareSelection(session.id)
-                            } else {
-                                selectedRecordID = session.id
-                            }
+                    // `Button` (not `onTapGesture`) gives the row proper Button highlighting,
+                    // keyboard activation on macOS, and a single VoiceOver announcement of the
+                    // row contents -- `onTapGesture` is invisible to assistive tech.
+                    Button {
+                        if compareMode {
+                            toggleCompareSelection(session.id)
+                        } else {
+                            selectedRecordID = session.id
                         }
-                        .listRowSeparator(.visible)
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                    } label: {
+                        sessionRow(session)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowSeparator(.visible)
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
                 .onDelete { indexSet in
                     for index in indexSet {

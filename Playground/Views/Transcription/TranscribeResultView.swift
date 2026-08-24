@@ -10,24 +10,50 @@ struct TranscribeResultView: View {
     @EnvironmentObject private var transcribeViewModel: TranscribeViewModel
     @EnvironmentObject private var settings: AppSettings
 
+    @StateObject private var audioPlayer = AudioPlayer()
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !transcribeViewModel.bufferEnergy.isEmpty {
+            // Show waveform as soon as recording starts, even before the first energy callback.
+            let energySamples: [Float] = transcribeViewModel.bufferEnergy.isEmpty && isRecording
+                ? Array(repeating: 0, count: 50)
+                : transcribeViewModel.bufferEnergy
+            if !energySamples.isEmpty {
                 WaveformView(
-                    samples: transcribeViewModel.bufferEnergy,
+                    samples: energySamples,
                     silenceThreshold: Float(settings.silenceThreshold),
                     isActive: isRecording
                 )
             }
 
-            if isRecording && transcribeViewModel.isTranscribing {
-                Text("🎙️ Recording in progress... Transcription will appear after you stop recording. For real-time results, switch to Stream mode.")
-                    .font(.title2)
+            // Audio playback for file-based transcriptions. The .id() key forces the view
+            // to recreate (and re-fire onAppear -> player.load) when the file path changes.
+            if !isRecording, let pathString = transcribeViewModel.currentAudioPath {
+                let audioURL = URL(fileURLWithPath: pathString)
+                AudioPlaybackView(
+                    audioURL: audioURL,
+                    segments: transcribeViewModel.confirmedSegments,
+                    player: audioPlayer
+                )
+                .id(pathString)
+                .padding(.bottom, 4)
+            }
+
+            if isRecording {
+                Text("Recording in progress... Transcription will appear after you stop.")
+                    .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.leading)
                     .padding(.horizontal)
                     .padding(.bottom, 8)
             }
+
+            SessionInfoStrip(
+                detectedLanguage: transcribeViewModel.detectedLanguage,
+                sessionLanguages: transcribeViewModel.sessionLanguages,
+                itnStatus: settings.itnStatus(detectedLanguage: transcribeViewModel.detectedLanguage,
+                                              loadedITNEnabled: sdkCoordinator.loadedITNEnabled)
+            )
 
             if selectedMode == .diarize && settings.diarizationMode == .disabled {
                 ContentUnavailableView(
@@ -43,7 +69,7 @@ struct TranscribeResultView: View {
 
                         // Decoder preview is isolated in DecoderPreviewLine which observes
                         // transcribeViewModel.decoderPreview (@Observable) directly, so only
-                        // this one small view re-renders on every currentText tick — not the
+                        // this one small view re-renders on every currentText tick -- not the
                         // full TranscribeResultView body with all speaker bubbles.
                         if settings.enableDecoderPreview {
                             DecoderPreviewLine(state: transcribeViewModel.decoderPreview)
@@ -70,26 +96,43 @@ struct TranscribeResultView: View {
         let unconfirmedSegments = transcribeViewModel.unconfirmedSegments
         let diarizedSpeakerSegments = transcribeViewModel.diarizedSpeakerSegments
         let customVocabularyResults = transcribeViewModel.customVocabularyResults
+        let keywordHighlights = sdkCoordinator.currentCustomVocabularyWords
         let enableTimestamps = settings.enableTimestamps
         let showShortAudioToast = transcribeViewModel.showShortAudioToast
         let isSpeakerKitMissing = sdkCoordinator.speakerKit == nil
         let isPyannoteModel = sdkCoordinator.loadedDiarizationModel?.isPyannote == true
+        let itnOn = settings.inverseTextNormalization
+
+        // True when an audio file is loaded -- we show PlaybackWordHighlightRow so
+        // word-level highlights can track player.currentTime without re-rendering the
+        // whole list (only the individual row re-renders via @ObservedObject).
+        let hasAudioFile = !isRecording && transcribeViewModel.currentAudioPath != nil
 
         if selectedMode == .transcription {
             ForEach(Array(confirmedSegments.enumerated()), id: \.element) { _, segment in
-                let timestampText = enableTimestamps
-                    ? "[\(String(format: "%.2f", segment.start)) --> \(String(format: "%.2f", segment.end))] "
-                    : ""
-                HighlightedTextView(
-                    prefixText: timestampText,
-                    segments: [segment],
-                    customVocabularyResults: customVocabularyResults,
-                    font: .headline.bold(),
-                    foregroundColor: .primary
-                )
-                .equatable()
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                if hasAudioFile, segment.words?.isEmpty == false {
+                    PlaybackWordHighlightRow(
+                        segment: segment,
+                        enableTimestamps: enableTimestamps,
+                        player: audioPlayer
+                    )
+                } else {
+                    let timestampText = enableTimestamps
+                        ? "[\(String(format: "%.2f", segment.start)) --> \(String(format: "%.2f", segment.end))] "
+                        : ""
+                    HighlightedTextView(
+                        prefixText: timestampText,
+                        segments: [segment],
+                        customVocabularyResults: customVocabularyResults,
+                        keywordHighlights: keywordHighlights,
+                        itnHighlight: settings.inverseTextNormalization,
+                        font: .headline.bold(),
+                        foregroundColor: .primary
+                    )
+                    .equatable()
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             ForEach(Array(unconfirmedSegments.enumerated()), id: \.element) { _, segment in
@@ -100,6 +143,8 @@ struct TranscribeResultView: View {
                     prefixText: timestampText,
                     segments: [segment],
                     customVocabularyResults: customVocabularyResults,
+                    keywordHighlights: keywordHighlights,
+                    itnHighlight: settings.inverseTextNormalization,
                     font: .headline.bold(),
                     foregroundColor: .gray
                 )
@@ -145,28 +190,27 @@ struct TranscribeResultView: View {
                 .padding(.horizontal)
             }
 
-            ForEach(Array(diarizedSpeakerSegments.enumerated()), id: \.element.id) { index, segment in
-                let words = segment.speakerWords.map(\.wordTiming)
-                let diarizedSegments = [TranscriptionSegment(text: segment.text, words: words.isEmpty ? nil : words)]
+            let groupBubbles = settings.groupSpeakerBubbles
+            ForEach(makeSpeakerGroups(diarizedSpeakerSegments, grouped: groupBubbles), id: \.firstIndex) { group in
                 HStack {
                     VStack(alignment: .leading) {
-                        if index == 0 || diarizedSpeakerSegments[index - 1].speaker.speakerId != segment.speaker.speakerId {
-                            Text(transcribeViewModel.speakerDisplayName(speakerId: segment.speaker.speakerId ?? -1))
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text(transcribeViewModel.messageChainTimestamp(currentIndex: index))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
+                        Text(transcribeViewModel.speakerDisplayName(speakerId: group.speakerId ?? -1))
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Text(transcribeViewModel.messageChainTimestamp(currentIndex: group.firstIndex))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
 
                         DiarizedSpeakerBubble(
-                            segments: diarizedSegments,
+                            segments: group.diarizedSegments,
                             customVocabularyResults: customVocabularyResults,
-                            backgroundColor: transcribeViewModel.getMessageBackground(speaker: segment.speaker),
-                            startTime: segment.speakerWords.first?.wordTiming.start ?? 0,
-                            endTime: segment.speakerWords.last?.wordTiming.end ?? 0,
-                            speakerId: segment.speaker.speakerId,
-                            onRenameSpeaker: { transcribeViewModel.renameSpeaker(speakerId: $0) }
+                            keywordHighlights: keywordHighlights,
+                            itnHighlight: itnOn,
+                            backgroundColor: SpeakerUI.color(for: group.speakerId),
+                            startTime: group.startTime,
+                            endTime: group.endTime,
+                            speakerId: group.speakerId,
+                            onRenameSpeaker: { transcribeViewModel.requestSpeakerRename(speakerId: $0) }
                         )
                         .equatable()
                     }
@@ -175,6 +219,116 @@ struct TranscribeResultView: View {
                 .padding(.horizontal)
             }
         }
+    }
+}
+
+// MARK: - Speaker group helpers
+
+/// Flat representation of one speaker bubble (may span multiple source segments when grouped).
+private struct SpeakerGroup {
+    let firstIndex: Int
+    let speakerId: Int?
+    let diarizedSegments: [TranscriptionSegment]
+    let startTime: Float
+    let endTime: Float
+}
+
+/// Converts `SpeakerSegment` array into display groups.
+/// When `grouped` is false each segment becomes its own group (original behaviour).
+/// When `grouped` is true consecutive segments from the same speaker are merged.
+private func makeSpeakerGroups(_ segments: [SpeakerSegment], grouped: Bool) -> [SpeakerGroup] {
+    guard !segments.isEmpty else { return [] }
+    if !grouped {
+        return segments.enumerated().map { (idx, seg) in
+            let words = seg.speakerWords.map(\.wordTiming)
+            return SpeakerGroup(
+                firstIndex: idx,
+                speakerId: seg.speaker.speakerId,
+                diarizedSegments: [TranscriptionSegment(text: seg.text, words: words.isEmpty ? nil : words)],
+                startTime: seg.speakerWords.first?.wordTiming.start ?? 0,
+                endTime: seg.speakerWords.last?.wordTiming.end ?? 0
+            )
+        }
+    }
+    var groups: [SpeakerGroup] = []
+    var i = 0
+    while i < segments.count {
+        let speakerId = segments[i].speaker.speakerId
+        var j = i
+        while j < segments.count && segments[j].speaker.speakerId == speakerId { j += 1 }
+        let slice = Array(segments[i..<j])
+        let txSegs = slice.map { seg -> TranscriptionSegment in
+            let words = seg.speakerWords.map(\.wordTiming)
+            return TranscriptionSegment(text: seg.text, words: words.isEmpty ? nil : words)
+        }
+        groups.append(SpeakerGroup(
+            firstIndex: i,
+            speakerId: speakerId,
+            diarizedSegments: txSegs,
+            startTime: slice.first?.speakerWords.first?.wordTiming.start ?? 0,
+            endTime: slice.last?.speakerWords.last?.wordTiming.end ?? 0
+        ))
+        i = j
+    }
+    return groups
+}
+
+// MARK: - Playback word-highlight row
+
+/// Replaces HighlightedTextView for file-based sessions when word timing data is available.
+/// Uses @ObservedObject on AudioPlayer so only this row re-renders on each 50ms timer tick
+/// rather than the entire segment list.
+private struct PlaybackWordHighlightRow: View {
+    let segment: TranscriptionSegment
+    let enableTimestamps: Bool
+    @ObservedObject var player: AudioPlayer
+
+    private var activeWordIndex: Int? {
+        guard (player.isPlaying || player.currentTime > 0),
+              let words = segment.words, !words.isEmpty else { return nil }
+        let t = Float(player.currentTime)
+        return words.firstIndex { t >= $0.start && t < $0.end }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if enableTimestamps {
+                Text("[\(String(format: "%.2f", segment.start)) --> \(String(format: "%.2f", segment.end))]")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let words = segment.words, !words.isEmpty {
+                Text(wordHighlightedText(words))
+                    .font(.headline.bold())
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(segment.text)
+                    .font(.headline.bold())
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            player.seek(to: TimeInterval(segment.start))
+            if !player.isPlaying { player.play() }
+        }
+    }
+
+    private func wordHighlightedText(_ words: [WordTiming]) -> AttributedString {
+        var result = AttributedString()
+        let idx = activeWordIndex
+        for (i, word) in words.enumerated() {
+            var chunk = AttributedString(word.word)
+            if i == idx {
+                chunk.foregroundColor = .accentColor
+                chunk.font = Font.headline.bold()
+            }
+            result += chunk
+        }
+        return result
     }
 }
 
@@ -214,10 +368,9 @@ private struct TranscriptionProgressBar: View {
                         .progressViewStyle(.linear)
                 }
 
-                if let task = transcribeViewModel.transcribeTask, !task.isCancelled {
+                if transcribeViewModel.hasActiveTranscriptionTask {
                     Button {
-                        transcribeViewModel.transcribeTask?.cancel()
-                        transcribeViewModel.transcribeTask = nil
+                        transcribeViewModel.cancelTranscription()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -254,6 +407,8 @@ private struct DecoderPreviewLine: View {
 private struct DiarizedSpeakerBubble: View, Equatable {
     let segments: [TranscriptionSegment]
     let customVocabularyResults: VocabularyResults
+    let keywordHighlights: [String]
+    let itnHighlight: Bool
     let backgroundColor: Color
     let startTime: Float
     let endTime: Float
@@ -263,6 +418,8 @@ private struct DiarizedSpeakerBubble: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.segments == rhs.segments &&
         lhs.customVocabularyResults == rhs.customVocabularyResults &&
+        lhs.keywordHighlights == rhs.keywordHighlights &&
+        lhs.itnHighlight == rhs.itnHighlight &&
         lhs.backgroundColor == rhs.backgroundColor &&
         lhs.startTime == rhs.startTime &&
         lhs.endTime == rhs.endTime &&
@@ -274,6 +431,8 @@ private struct DiarizedSpeakerBubble: View, Equatable {
         HighlightedTextView(
             segments: segments,
             customVocabularyResults: customVocabularyResults,
+            keywordHighlights: keywordHighlights,
+            itnHighlight: itnHighlight,
             font: .headline,
             foregroundColor: .white
         )
@@ -286,13 +445,117 @@ private struct DiarizedSpeakerBubble: View, Equatable {
             Button(action: { onRenameSpeaker(speakerId ?? -1) }) {
                 Label("Rename Speaker", systemImage: "pencil")
             }
-            Text("[\(String(format: "%.2f", startTime)) → \(String(format: "%.2f", endTime))]")
+            Text("[\(String(format: "%.2f", startTime)) -> \(String(format: "%.2f", endTime))]")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .onLongPressGesture {
-            onRenameSpeaker(speakerId ?? -1)
+    }
+}
+
+// MARK: - Qwen Dictation Result View
+
+/// Shown instead of TranscribeResultView during Qwen dictation. Renders fast and exact
+/// final results as they arrive, with latency relative to the recording stop gesture.
+struct QwenDictationResultView: View {
+    let isRecording: Bool
+
+    @EnvironmentObject private var transcribeViewModel: TranscribeViewModel
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            let energySamples: [Float] = transcribeViewModel.bufferEnergy.isEmpty && isRecording
+                ? Array(repeating: 0, count: 50)
+                : transcribeViewModel.bufferEnergy
+            if !energySamples.isEmpty {
+                WaveformView(
+                    samples: energySamples,
+                    silenceThreshold: Float(settings.silenceThreshold),
+                    isActive: isRecording
+                )
+            }
+
+            let metrics = transcribeViewModel.qwenMetrics
+            let audioSeconds = metrics?.audioSeconds
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if transcribeViewModel.dictationFastFinalText == nil && isRecording {
+                        Text("Listening...")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let text = transcribeViewModel.dictationFastFinalText {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Label("Hypothesis", systemImage: "waveform")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                if let audio = audioSeconds,
+                                   let ffa = metrics?.timelineFastFinalApp {
+                                    Text(hypothesisLatencyLabel(delta: ffa - audio))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(text)
+                                .font(.headline)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .padding(12)
+                        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    if let text = transcribeViewModel.dictationExactFinalText {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Label("Exact final", systemImage: "checkmark.seal.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.green)
+                                if let label = exactFinalLatencyLabel(metrics: metrics) {
+                                    Text(label)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(text)
+                                .font(.headline)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .padding(12)
+                        .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    private func hypothesisLatencyLabel(delta: Double) -> String {
+        if delta < 0 {
+            return "(\(String(format: "%.2f", -delta))s before stop)"
+        } else {
+            return "(+\(String(format: "%.2f", delta))s after stop)"
+        }
+    }
+
+    private func exactFinalLatencyLabel(metrics: QwenStreamMetrics?) -> String? {
+        guard let metrics else { return nil }
+        let latency = metrics.exactFinalSeconds ?? 0
+        if metrics.fastFinalSeconds != nil {
+            // Auto-prewarm was consumed: finish() returned from cache (near-instant).
+            let ms = Int(latency * 1000)
+            return "Finalized during trailing silence · finish: ~\(ms)ms"
+        }
+        // Cold decode: finish() ran the full decode after the stop gesture.
+        return "+\(String(format: "%.2f", latency))s after stop (cold decode)"
     }
 }
 
@@ -379,5 +642,66 @@ private extension View {
         } else {
             self.textSelection(.disabled)
         }
+    }
+}
+
+// MARK: - Session Info Strip
+
+/// Compact horizontal strip showing detected language and ITN status.
+/// Placed at the top of both TranscribeResultView and StreamResultView.
+struct SessionInfoStrip: View {
+    let detectedLanguage: String?
+    let sessionLanguages: [String]
+    let itnStatus: AppSettings.ITNStatus
+
+    private var displayLanguage: String? {
+        guard let l = detectedLanguage, !l.isEmpty, l != "auto" else { return nil }
+        return l
+    }
+
+    private var itnLabel: String? {
+        switch itnStatus {
+        case .inactive: nil
+        case .active: "ITN"
+        case .unsupportedLanguage: "ITN unavailable"
+        case .reloadRequired: "ITN: reload model"
+        }
+    }
+
+    var body: some View {
+        if displayLanguage != nil || itnLabel != nil {
+            HStack(spacing: 6) {
+                if let lang = displayLanguage {
+                    infoChip(lang.capitalized, systemImage: "globe")
+                    if sessionLanguages.count > 1 {
+                        let allLanguages = sessionLanguages.map { $0.capitalized }.joined(separator: " · ")
+                        Text("+\(sessionLanguages.count - 1)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Session languages: \(allLanguages)")
+                    }
+                }
+                if let itn = itnLabel {
+                    infoChip(itn, systemImage: "textformat.123")
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func infoChip(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .imageScale(.small)
+            Text(text)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(.quaternary, in: Capsule())
     }
 }

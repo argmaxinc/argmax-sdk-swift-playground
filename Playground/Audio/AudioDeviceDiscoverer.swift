@@ -28,7 +28,7 @@ import SwiftUI
 ///     // Use deviceID for audio recording
 /// }
 /// ```
-class AudioDeviceDiscoverer: ObservableObject {
+final class AudioDeviceDiscoverer: ObservableObject {
     #if os(macOS)
     static let noAudioDevice = AudioDevice(id: 0, name: "No Audio")
     @Published var audioDevices: [AudioDevice] = []
@@ -68,14 +68,19 @@ class AudioDeviceDiscoverer: ObservableObject {
         audioDevices = filteredDevices + [AudioDeviceDiscoverer.noAudioDevice]
         
         if selectFirst, !audioDevices.isEmpty {
-            // First, try to restore the previously stored selection if it exists in current devices
+            // Restore the stored selection if it still exists in the current device list
+            // (including a deliberately chosen "No Audio" for process-tap-only streaming).
             if !storedSelectedAudioInput.isEmpty,
                audioDevices.contains(where: { $0.name == storedSelectedAudioInput }) {
                 selectedAudioInput = storedSelectedAudioInput
-            } else if let device = audioDevices.first {
-                // Fallback to first device if stored selection is not available
+            } else if let device = filteredDevices.first {
+                // Auto-select only a real input; on a zero-input launch the selection stays
+                // empty rather than persisting the "No Audio" sentinel.
                 selectedAudioInput = device.name
             }
+        } else if selectedAudioInput.isEmpty, let device = filteredDevices.first {
+            // A real input appeared after a zero-input launch: adopt it.
+            selectedAudioInput = device.name
         }
         #endif
     }

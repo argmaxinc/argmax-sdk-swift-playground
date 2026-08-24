@@ -15,18 +15,14 @@ import Argmax
 /// - **Content State Management:** Buffers and throttles updates to prevent system rate limiting
 /// - **Heartbeat Monitoring:** Auto-dismisses stale activities after 60 seconds of no updates
 /// - **Orphaned Activity Cleanup:** Removes lingering activities from previous app sessions
-/// - **Error Recovery:** Graceful handling of ActivityKit errors and edge cases
+/// - **Resilient Lifecycle:** Logs and rethrows ActivityKit errors so the caller can surface them
 /// 
-/// ## Heartbeat Protection
-/// 
-/// The manager implements a 60-second heartbeat timer that automatically terminates activities
-/// that haven't received updates, preventing lingering notifications when:
-/// - App crashes unexpectedly
-/// - iOS terminates the app due to memory pressure
-/// - Transcription pipeline hangs or stops unexpectedly
-/// - Network connectivity issues prevent updates
-/// 
-/// The heartbeat resets on every content update, so active transcriptions remain visible indefinitely.
+/// ## Heartbeat
+///
+/// The manager runs a 60-second heartbeat timer. Each content update resets the timer, so active
+/// transcriptions stay visible indefinitely; if updates stop arriving (suspended app, system
+/// memory reclaim, lost connectivity), the timer ends the activity so a stale indicator doesn't
+/// linger on the Lock Screen or Dynamic Island.
 /// 
 /// ## Usage Pattern
 /// 
@@ -54,28 +50,39 @@ import Argmax
 /// All methods are marked `@MainActor` and must be called from the main thread to ensure
 /// thread-safe access to ActivityKit APIs and internal state management.
 @MainActor
-class LiveActivityManager: ObservableObject {
+final class LiveActivityManager: ObservableObject {
     private var currentActivity: Activity<TranscriptionAttributes>?
     private var bufferedContentState = TranscriptionAttributes.ContentState(
         currentHypothesis: "",
         audioSeconds: 0.0,
         isInterrupted: false
     )
-    
+
     // Single identifier for the activity
     private static let activityAttributes = TranscriptionAttributes(sessionId: "stream-transcription")
-    
+
     // Throttling to limit updates to once per second
     private var lastUpdateTime: TimeInterval = 0
-    private var pendingUpdate = false
+    private var pendingUpdateTask: Task<Void, Never>?
     private var updateInterval = 1.0
-    
-    // Heartbeat to auto-dismiss stale activities
+
+    // Heartbeat to auto-dismiss stale streaming activities (model loading uses stale date instead)
     private var heartbeatTask: Task<Void, Never>?
     private let heartbeatTimeout: TimeInterval = 60.0
+
+    // Tracks whether the current activity is for streaming or model loading.
+    private enum ActivityMode { case none, streaming, modelLoading }
+    private var activityMode: ActivityMode = .none
+
+    // Last download percentage pushed to the widget; -1 = not yet set. Used to gate the
+    // 1%-minimum step so Apple's widget-update budget isn't exhausted on fractional changes.
+    private var lastReportedPercent: Int = -1
+    private var lastReportedStateLabel: String?
     
-    /// Starts a live activity for the current transcription session
-    /// - Throws: ActivityKit errors if activity cannot be started
+    /// - Throws: any ActivityKit error from `Activity.request`. When the user has disabled Live
+    ///   Activities at the system level (`areActivitiesEnabled == false`) the call returns
+    ///   without throwing -- the user controls that setting and the caller shouldn't treat it
+    ///   as an error.
     func startActivity() async throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             Logging.error("Live Activities are not enabled")
@@ -95,10 +102,11 @@ class LiveActivityManager: ObservableObject {
         do {
             let activity = try Activity.request(
                 attributes: Self.activityAttributes,
-                content: .init(state: initialContentState, staleDate: nil)
+                content: .init(state: initialContentState, staleDate: nextStaleDate())
             )
             
             currentActivity = activity
+            activityMode = .streaming
             startHeartbeat()
             Logging.debug("Live activity started successfully: \(activity.id)")
         } catch {
@@ -107,15 +115,16 @@ class LiveActivityManager: ObservableObject {
         }
     }
     
-    /// Updates the buffered content state with throttling to limit to once per second, too frequent update to dynamic island will be throttled
-    /// - Parameter updateBlock: Block that modifies the content state
+    /// Applies `updateBlock` to the buffered content state and schedules the result for delivery.
+    /// Calls inside the throttle window coalesce: the latest state wins, so callers can fire
+    /// updates per transcription tick without flooding ActivityKit.
     func updateContentState(updateBlock: (TranscriptionAttributes.ContentState) -> TranscriptionAttributes.ContentState) async {
         guard currentActivity != nil else { return }
         
         let oldState = bufferedContentState
         let newState = updateBlock(oldState)
         
-        // Only proceed if state actually changed
+        // Only proceed if state changed
         guard newState != oldState else { return }
         
         bufferedContentState = newState
@@ -123,67 +132,73 @@ class LiveActivityManager: ObservableObject {
         let now = Date().timeIntervalSince1970
         let timeSinceLastUpdate = now - lastUpdateTime
         
-        // Reset heartbeat since we're receiving updates
-        startHeartbeat()
+        // Reset heartbeat for streaming sessions only; model loading is governed by its stale date.
+        if activityMode == .streaming { startHeartbeat() }
         
-        // Throttle updates to maximum once per second
+        // Throttle updates to maximum once per second. Coalesce by cancelling any prior
+        // pending task -- the last call wins, so updates can't stack up under high frequency.
         if timeSinceLastUpdate >= updateInterval {
+            pendingUpdateTask?.cancel()
+            pendingUpdateTask = nil
             await performUpdate()
-        } else if !pendingUpdate {
-            // Schedule a delayed update
-            pendingUpdate = true
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64((updateInterval - timeSinceLastUpdate) * 1_000_000_000))
-                if pendingUpdate {
-                    await performUpdate()
-                }
+        } else {
+            pendingUpdateTask?.cancel()
+            let delaySeconds = updateInterval - timeSinceLastUpdate
+            pendingUpdateTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await self?.performUpdate()
             }
         }
     }
-    
-    /// Performs the actual Live Activity update
+
     private func performUpdate() async {
         guard let activity = currentActivity else { return }
-        
-        lastUpdateTime = Date().timeIntervalSince1970
-        pendingUpdate = false
 
-        await activity.update(.init(state: bufferedContentState, staleDate: nil))
+        lastUpdateTime = Date().timeIntervalSince1970
+        pendingUpdateTask = nil
+
+        await activity.update(.init(state: bufferedContentState, staleDate: nextStaleDate()))
+    }
+
+    /// Stale-date sentinel synced to the heartbeat timeout -- iOS dims the activity if no
+    /// update arrives by then, which matches when our heartbeat would have ended it anyway.
+    private func nextStaleDate() -> Date {
+        Date().addingTimeInterval(heartbeatTimeout)
     }
     
-    /// Stops the current live activity
-    /// - Parameter dismissalPolicy: How to dismiss the activity
     func stopActivity(dismissalPolicy: ActivityUIDismissalPolicy = .default) async {
         guard let activity = currentActivity else {
             return
         }
         
-        // Cancel heartbeat before stopping activity
+        // Cancel heartbeat and any pending throttled update before stopping activity
         stopHeartbeat()
-        
-        await activity.end(nil, dismissalPolicy: .immediate)
+        pendingUpdateTask?.cancel()
+        pendingUpdateTask = nil
+
+        await activity.end(nil, dismissalPolicy: dismissalPolicy)
         bufferedContentState = .init(currentHypothesis: "", audioSeconds: 0, isInterrupted: false)
         currentActivity = nil
+        activityMode = .none
     }
     
-    /// Indicates whether a live activity is currently running
     var isActivityRunning: Bool {
         currentActivity != nil
     }
-    
-    /// Cleans up any orphaned activities on app launch
-    /// Should be called during app initialization to clear stale activities
+
+    /// Ends every `TranscriptionAttributes` activity the system has registered -- crash and
+    /// force-quit leftovers included -- except the one this manager is driving, so it's safe
+    /// to call at any time.
     func cleanupOrphanedActivities() async {
-        // End any existing activities that might be left over from previous sessions
-        for activity in Activity<TranscriptionAttributes>.activities {
+        for activity in Activity<TranscriptionAttributes>.activities where activity.id != currentActivity?.id {
             Logging.debug("Cleaning up orphaned activity: \(activity.id)")
             await activity.end(nil, dismissalPolicy: .immediate)
         }
     }
     
     // MARK: - Heartbeat Management
-    
-    /// Starts or restarts the heartbeat timer to auto-dismiss stale activities
+
     private func startHeartbeat() {
         // Cancel existing heartbeat
         heartbeatTask?.cancel()
@@ -200,39 +215,155 @@ class LiveActivityManager: ObservableObject {
         }
     }
     
-    /// Stops the heartbeat timer
     private func stopHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = nil
     }
     
-    /// Handles heartbeat timeout by auto-dismissing the stale activity
-    /// Interrupted activities are preserved to inform the user of the issue
+    /// Interrupted streaming activities survive the timeout so the user still sees the "session
+    /// was cut off" indicator. Model-loading activities are never auto-dismissed by the heartbeat
+    /// (they use a dedicated stale date instead).
     private func handleHeartbeatTimeout() async {
-        guard currentActivity != nil else { return }
-        
-        // Don't auto-dismiss interrupted activities - let them persist for user awareness
+        guard currentActivity != nil, activityMode == .streaming else { return }
+
         if bufferedContentState.isInterrupted {
             Logging.debug("Live Activity heartbeat timeout - preserving interrupted activity for user notification")
             return
         }
-        
-        Logging.debug("Live Activity heartbeat timeout - auto-dismissing stale activity")
+
+        Logging.debug("Live Activity heartbeat timeout - auto-dismissing stale streaming activity")
         await stopActivity(dismissalPolicy: .immediate)
     }
     
-    /// Handles app entering foreground - dismisses interrupted activities since user has seen them
+    /// When the app comes back to the foreground we treat an interrupted streaming activity as
+    /// acknowledged: the user is looking at the app, so the "session interrupted" banner has
+    /// served its purpose and can be dismissed. Model-loading activities are left running.
     func handleAppEnteredForeground() async {
-        // If there's an interrupted activity, dismiss it since user has acknowledged it
-        if currentActivity != nil && bufferedContentState.isInterrupted {
+        await cleanupOrphanedActivities()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            await self?.cleanupOrphanedActivities()
+        }
+        guard activityMode == .streaming else { return }
+        if bufferedContentState.isInterrupted {
             await stopActivity(dismissalPolicy: .immediate)
         }
     }
-    
-    /// Cleanup when manager is deallocated
+
+    // MARK: - Model loading progress
+
+    /// Starts a Live Activity showing model download or initialization progress.
+    /// No-ops when a streaming session is already running or Live Activities are disabled.
+    func startModelLoadingActivity(progress: TranscriptionAttributes.ModelProgressState) async {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard activityMode == .none else { return }
+        // Claim the mode before the first await so a concurrent call can't start a second activity.
+        activityMode = .modelLoading
+
+        await cleanupOrphanedActivities()
+
+        let initialState = TranscriptionAttributes.ContentState(
+            currentHypothesis: "",
+            audioSeconds: 0,
+            isInterrupted: false,
+            modelProgress: progress
+        )
+        bufferedContentState = initialState
+
+        do {
+            let activity = try Activity.request(
+                attributes: Self.activityAttributes,
+                // 10-minute stale window: large models on slow connections take several minutes.
+                content: .init(state: initialState, staleDate: Date().addingTimeInterval(600))
+            )
+            currentActivity = activity
+            lastReportedPercent = progress.progressPercent ?? -1
+            lastReportedStateLabel = progress.stateLabel
+            Logging.debug("[LiveActivity] Model loading activity started: \(progress.modelName) - \(progress.stateLabel)")
+        } catch {
+            activityMode = .none
+            Logging.error("[LiveActivity] Failed to start model loading activity: \(error)")
+        }
+    }
+
+    /// Stops the model loading Live Activity (no-op if none is running).
+    func stopModelLoadingActivity() async {
+        guard activityMode == .modelLoading else { return }
+        await stopActivity(dismissalPolicy: .immediate)
+        lastReportedPercent = -1
+        lastReportedStateLabel = nil
+    }
+
+    /// Called whenever pipeline rows or session state changes. Starts, updates, or stops the
+    /// model-loading Live Activity. Only runs when no streaming/transcription session is active.
+    ///
+    /// Updates are throttled to 1% steps for download progress; discrete state transitions
+    /// (Specializing, Loading, etc.) always push immediately.
+    func handleModelStateChange(pipelineRows: [ModelPipelineRow], isSessionActive: Bool) async {
+        guard !isSessionActive else { return }
+
+        // Transcription row takes priority; fall through to diarization row if transcription is idle.
+        let candidate = pipelineRows.first { isActiveLoadingState($0.state) }
+
+        if let row = candidate, let progress = modelProgressState(from: row) {
+            // Throttle by percent only while the label is unchanged: a state flip at the
+            // same percent (e.g. Downloading -> Paused at 42%) must still go through.
+            if let pct = progress.progressPercent, activityMode == .modelLoading,
+               progress.stateLabel == lastReportedStateLabel {
+                guard abs(pct - lastReportedPercent) >= 1 else { return }
+            }
+
+            if activityMode == .none {
+                await startModelLoadingActivity(progress: progress)
+            } else if activityMode == .modelLoading {
+                lastReportedPercent = progress.progressPercent ?? -1
+                lastReportedStateLabel = progress.stateLabel
+                await updateContentState { state in
+                    var s = state
+                    s.modelProgress = progress
+                    return s
+                }
+            }
+        } else if activityMode == .modelLoading {
+            await stopModelLoadingActivity()
+        }
+    }
+
+    private func isActiveLoadingState(_ state: PipelineState) -> Bool {
+        switch state {
+        case .downloading, .waitingForWifi, .paused, .verifying, .unverified, .specializing, .loading:
+            return true
+        case .notDownloaded, .downloaded, .loaded, .failed, .incomplete:
+            return false
+        }
+    }
+
+    private func modelProgressState(from row: ModelPipelineRow) -> TranscriptionAttributes.ModelProgressState? {
+        switch row.state {
+        case .downloading(let fraction, _, _):
+            let pct = max(0, min(100, Int((fraction * 100).rounded())))
+            return .init(stateLabel: "Downloading", modelName: row.modelName, progressPercent: pct)
+        case .waitingForWifi:
+            return .init(stateLabel: "Waiting for Wi-Fi", modelName: row.modelName, progressPercent: nil)
+        case .paused(let fraction):
+            let pct = max(0, min(100, Int((fraction * 100).rounded())))
+            return .init(stateLabel: "Paused", modelName: row.modelName, progressPercent: pct)
+        case .verifying, .unverified:
+            return .init(stateLabel: "Verifying", modelName: row.modelName, progressPercent: nil)
+        case .specializing:
+            return .init(stateLabel: "Specializing", modelName: row.modelName, progressPercent: nil)
+        case .loading:
+            return .init(stateLabel: "Loading", modelName: row.modelName, progressPercent: nil)
+        case .notDownloaded, .downloaded, .loaded, .failed, .incomplete:
+            return nil
+        }
+    }
+
+
     deinit {
         heartbeatTask?.cancel()
+        pendingUpdateTask?.cancel()
     }
-    
+
 }
 #endif

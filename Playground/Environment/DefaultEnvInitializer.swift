@@ -56,8 +56,8 @@ class DefaultEnvInitializer: PlaygroundEnvInitializer {
 
     public func createAPIKeyProvider() -> APIKeyProvider {
         return PlainTextAPIKeyProvider(
-            apiKey: "", // TODO: Add your Argmax Pro API key here (required)
-            huggingFaceToken: "" // TODO: Add your Hugging Face token here (optional)
+            apiKey: "", // Replace with your own key from app.argmaxinc.com for higher quotas.
+            huggingFaceToken: "" // Optional Hugging Face token. Generate one at huggingface.co/settings/tokens if you need access to gated models.
         )
     }
 
@@ -71,17 +71,12 @@ class DefaultEnvInitializer: PlaygroundEnvInitializer {
 /// This provider is suitable for development and testing but should not be used
 /// in production applications. For better security, consider using `ObfuscatedKeyProvider`
 /// or retrieving keys from a secure backend service.
-private class PlainTextAPIKeyProvider: APIKeyProvider {
-    public let apiKey: String?
-    public let huggingFaceToken: String?
-    
+private final class PlainTextAPIKeyProvider: APIKeyProvider {
+    let apiKey: String?
+    let huggingFaceToken: String?
+
     init(apiKey: String, huggingFaceToken: String? = nil) {
         self.apiKey = apiKey.isEmpty ? nil : apiKey
-        // huggingFaceToken is optional
-        if let huggingFaceToken {
-            self.huggingFaceToken = huggingFaceToken.isEmpty ? nil : huggingFaceToken
-        } else {
-            self.huggingFaceToken = nil
-        }
+        self.huggingFaceToken = huggingFaceToken?.isEmpty == false ? huggingFaceToken : nil
     }
 }

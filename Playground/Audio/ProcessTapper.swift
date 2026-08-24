@@ -6,7 +6,7 @@ import AVFoundation
 /// A macOS utility class that enables tapping into one or more system audio processes to capture their audio output
 /// for real-time transcription with WhisperKit.
 ///
-/// `ProcessTapper` provides a bridge between macOS system audio and WhisperKit's transcription engine by capturing 
+/// `ProcessTapper` provides a bridge between macOS system audio and WhisperKit's transcriber by capturing 
 /// audio from specified processes and converting it to the appropriate format for speech recognition. This class uses 
 /// Core Audio APIs to create process taps and aggregate devices for capturing audio from specified process object IDs.
 ///
@@ -243,7 +243,7 @@ public final class ProcessTapper {
             throw ProcessTapperError.alreadyRunning
         }
         self.currentCallback = callback
-        try startAudioCapture(callback: callback)
+        try startAudioCapture()
         
         isRunning = true
     }
@@ -275,42 +275,44 @@ public final class ProcessTapper {
     /// try processTapper.stop()
     /// ```
     public func stop() throws {
-        guard isRunning else { return }
-        do {
-            try pause()
-        } catch {
-            Logging.error("Failed to pause ProcessTapper: \(error)")
+        // Stop the IO stream only when running. The CoreAudio objects below get torn
+        // down regardless -- `init` allocates them via `setupProcessTapAndAggregateDevice()`,
+        // so an instance that never called `startTap` still owns them and must release them.
+        if isRunning {
+            do {
+                try pause()
+            } catch {
+                Logging.error("Failed to pause ProcessTapper: \(error)")
+            }
         }
 
-        // Stop audio device
+        // Attempt every cleanup step. If one fails, capture the OSStatus and keep going --
+        // skipping the rest would leak the remaining CoreAudio objects for the lifetime of
+        // the host process.
+        var firstError: OSStatus = noErr
+
         if aggregateDeviceID != kAudioObjectUnknown {
-            // Destroy IO proc
             if let deviceProcID {
                 let err = AudioDeviceDestroyIOProcID(aggregateDeviceID, deviceProcID)
-                if err != noErr {
-                    throw ProcessTapperError.operationFailed
-                }
+                if err != noErr, firstError == noErr { firstError = err }
                 self.deviceProcID = nil
             }
-            
-            // Destroy aggregate device
             let err = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
-            if err != noErr {
-                throw ProcessTapperError.operationFailed
-            }
+            if err != noErr, firstError == noErr { firstError = err }
             aggregateDeviceID = kAudioObjectUnknown
         }
-        
-        // Destroy process tap
+
         if processTapID != kAudioObjectUnknown {
             let err = AudioHardwareDestroyProcessTap(processTapID)
-            if err != noErr {
-                throw ProcessTapperError.operationFailed
-            }
+            if err != noErr, firstError == noErr { firstError = err }
             processTapID = kAudioObjectUnknown
         }
-        
+
         isRunning = false
+
+        if firstError != noErr {
+            throw ProcessTapperError.operationFailed
+        }
     }
     
     private func pause() throws {
@@ -386,7 +388,10 @@ public final class ProcessTapper {
         }
     }
     
-    private func startAudioCapture(callback: @escaping AudioBufferCallback) throws {
+    /// Starts the IO stream on the aggregate device. The audio callback was already stored by
+    /// `startTap(callback:)` before this is called -- IOProc invocations use that stored callback,
+    /// so no parameter is needed here.
+    private func startAudioCapture() throws {
         let err = AudioDeviceStart(aggregateDeviceID, deviceProcID)
         guard err == noErr else {
             throw ProcessTapperError.operationFailed

@@ -45,6 +45,20 @@ struct SessionDetailView: View {
                         #endif
                     }
 
+                    if let traceURL = record.traceFileURL {
+                        #if os(macOS)
+                        Button { saveTraceWithPanel() } label: {
+                            Label("Save Replay Trace", systemImage: "doc.badge.clock")
+                        }
+                        .buttonStyle(.borderless)
+                        #else
+                        ShareLink(item: traceURL) {
+                            Label("Save Replay Trace", systemImage: "doc.badge.clock")
+                        }
+                        .buttonStyle(.borderless)
+                        #endif
+                    }
+
                     #if os(macOS)
                     if allSessions.count >= 2 {
                         if compareTarget != nil {
@@ -153,7 +167,8 @@ struct SessionDetailView: View {
                         } label: {
                             TranscriptionSegmentLabel(
                                 segment: segment,
-                                isActive: isSegmentActive(start: segment.start, end: segment.end)
+                                isActive: isSegmentActive(start: segment.start, end: segment.end),
+                                activeWordIndex: activeWordIndex(in: segment)
                             )
                             .equatable()
                         }
@@ -180,6 +195,13 @@ struct SessionDetailView: View {
         return t >= start && t < end
     }
 
+    private func activeWordIndex(in segment: TranscriptionSegment) -> Int? {
+        guard audioPlayer.isPlaying || audioPlayer.currentTime > 0,
+              let words = segment.words, !words.isEmpty else { return nil }
+        let t = Float(audioPlayer.currentTime)
+        return words.firstIndex { t >= $0.start && t < $0.end }
+    }
+
     @ViewBuilder
     private var timingSummarySection: some View {
         if record.mode != .stream,
@@ -199,6 +221,17 @@ struct SessionDetailView: View {
         guard let sourceURL = record.audioFileURL else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType.wav]
+        panel.nameFieldStringValue = sourceURL.lastPathComponent
+        panel.begin { response in
+            guard response == .OK, let destURL = panel.url else { return }
+            try? FileManager.default.copyItem(at: sourceURL, to: destURL)
+        }
+    }
+
+    private func saveTraceWithPanel() {
+        guard let sourceURL = record.traceFileURL else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType.json]
         panel.nameFieldStringValue = sourceURL.lastPathComponent
         panel.begin { response in
             guard response == .OK, let destURL = panel.url else { return }
@@ -242,7 +275,7 @@ private struct DiarizedSegmentLabel: View, Equatable {
     let showHeader: Bool
     let isActive: Bool
 
-    // DisplaySpeakerSegment doesn't conform to Equatable — compare content fields directly
+    // DisplaySpeakerSegment doesn't conform to Equatable -- compare content fields directly
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.isActive == rhs.isActive &&
         lhs.showHeader == rhs.showHeader &&
@@ -284,9 +317,14 @@ private struct DiarizedSegmentLabel: View, Equatable {
 private struct TranscriptionSegmentLabel: View, Equatable {
     let segment: TranscriptionSegment
     let isActive: Bool
+    /// Index into `segment.words` of the word whose start…end bracket `audioPlayer.currentTime`.
+    /// Nil when not playing, no word data exists, or playback is between word boundaries.
+    let activeWordIndex: Int?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.isActive == rhs.isActive && lhs.segment == rhs.segment
+        lhs.isActive == rhs.isActive &&
+        lhs.activeWordIndex == rhs.activeWordIndex &&
+        lhs.segment == rhs.segment
     }
 
     var body: some View {
@@ -295,9 +333,32 @@ private struct TranscriptionSegmentLabel: View, Equatable {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(width: 120, alignment: .trailing)
-            Text(segment.text)
-                .font(.body)
-                .foregroundColor(isActive ? .accentColor : .primary)
+            if let words = segment.words, !words.isEmpty {
+                // Always render via AttributedString when word data is present.
+                // Gating on activeWordIndex != nil caused a flash: inter-word gaps
+                // switched to the full-segment-highlight plain Text, then back.
+                Text(wordHighlightedText(words: words))
+                    .font(.body)
+            } else {
+                Text(segment.text)
+                    .font(.body)
+                    .foregroundColor(isActive ? .accentColor : .primary)
+            }
         }
+    }
+
+    /// Builds an AttributedString where the active word is accent-colored and bolded;
+    /// all other words use the default foreground color.
+    private func wordHighlightedText(words: [WordTiming]) -> AttributedString {
+        var result = AttributedString()
+        for (i, word) in words.enumerated() {
+            var chunk = AttributedString(word.word)
+            if i == activeWordIndex {
+                chunk.foregroundColor = .accentColor
+                chunk.font = Font.body.bold()
+            }
+            result += chunk
+        }
+        return result
     }
 }

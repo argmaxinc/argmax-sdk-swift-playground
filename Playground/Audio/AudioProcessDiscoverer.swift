@@ -58,7 +58,14 @@ import Argmax
 ///
 /// - Important: This class requires macOS 14.2+ and appropriate audio permissions.
 ///   Applications must declare `NSAudioCaptureUsageDescription` in their Info.plist.
-class AudioProcessDiscoverer: ObservableObject {
+/// Marked `@MainActor` so the published lists (`activeAudioProcessList`,
+/// `selectedProcessForStream`) and the in-flight flags (`isRefreshInProgress`,
+/// `isTapperChanging`) are all guarded by main-actor isolation. Genuine background work -- the
+/// CoreAudio `AudioObjectGetPropertyData*` calls in `refreshProcessList`, the
+/// `ProcessTapper.stop()` cleanup in tapper teardown -- dispatches via explicit
+/// `DispatchQueue.global` / `Task.detached`.
+@MainActor
+final class AudioProcessDiscoverer: ObservableObject {
     @Published var activeAudioProcessList = [AudioProcess]()
     @Published var selectedProcessForStream: AudioProcess = AudioProcess.noAudio {
         didSet {
@@ -101,11 +108,16 @@ class AudioProcessDiscoverer: ObservableObject {
     func refreshProcessList() {
         // Prevent handleSelectedProcessChange during refresh
         isRefreshInProgress = true
-        
+
         // Capture current selection to preserve it
         let currentSelection = selectedProcessForStream
-        
-        // Create the address value locally—Core Audio APIs require an `inout` parameter, so it
+
+        // Snapshot `NSWorkspace.runningApplications` on the main thread before dispatching to
+        // a background queue. `NSWorkspace` is not documented as thread-safe; the snapshot is a
+        // plain `[Int32: String]` we can hand off freely.
+        let localizedAppNames = AudioProcess.snapshotLocalizedAppNames()
+
+        // Create the address value locally--Core Audio APIs require an `inout` parameter, so it
         // must be `var` inside the background block.
         var address = getPropertyAddress(selector: kAudioHardwarePropertyProcessObjectList)
 
@@ -123,7 +135,7 @@ class AudioProcessDiscoverer: ObservableObject {
             newProcessList.reserveCapacity(idList.count)
 
             for pid in idList {
-                let process = AudioProcess(id: pid)
+                let process = AudioProcess(id: pid, localizedAppNames: localizedAppNames)
                 if process.isRunning {
                     newProcessList.append(process)
                 }

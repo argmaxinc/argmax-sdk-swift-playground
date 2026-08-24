@@ -16,6 +16,11 @@ struct CustomVocabularySheet: View {
     
     private var hasExistingVocabulary: Bool { !words.isEmpty }
 
+    /// `true` when Qwen is the active transcriber (vocabulary injection, no model download needed).
+    private var isQwenMode: Bool {
+        sdkCoordinator.qwen != nil
+    }
+
     /// Parses user input for custom vocabulary by cleaning and formatting the words.
     ///
     /// - Parameter input: The raw user input string with comma- or line-separated words
@@ -27,7 +32,17 @@ struct CustomVocabularySheet: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
-    
+
+    /// `true` when the user has a custom-vocabulary model selected, a transcription model is
+    /// loaded, and the CTC graph isn't paired with it -- the SDK pairs custom vocabulary with
+    /// Parakeet transcription models. Qwen never shows this warning (no model pairing needed).
+    private var customVocabUnsupported: Bool {
+        guard !isQwenMode else { return false }
+        guard sdkCoordinator.pipelineSelection.customVocabularyModel != nil else { return false }
+        guard sdkCoordinator.whisperKitModelState == .loaded else { return false }
+        return sdkCoordinator.whisperKit?.customVocabularyModelState != .loaded
+    }
+
     var body: some View {
         let isEditingMode = hasExistingVocabulary ? isEditing : true
         let listHeight = min(CGFloat(max(words.count, 1)) * 44, 320)
@@ -37,13 +52,29 @@ struct CustomVocabularySheet: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Text("Enter words or phrases separated by commas or line breaks. Requires loading a parakeet model with custom vocabulary enabled.")
+            Text(isQwenMode
+                 ? "Enter words or phrases separated by commas or line breaks. Words are injected as prompt context — no extra model download required."
+                 : "Enter words or phrases separated by commas or line breaks. Requires loading a parakeet model with custom vocabulary enabled.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal)
+
+            if customVocabUnsupported {
+                Label(
+                    "The loaded transcription model doesn't support custom vocabulary. Unload and switch to a Parakeet model to apply these words.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundColor(.orange)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(8)
+                .padding(.horizontal)
+            }
 
             if hasExistingVocabulary {
                 Picker("", selection: $isEditing) {

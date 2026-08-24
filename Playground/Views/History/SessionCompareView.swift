@@ -98,8 +98,7 @@ struct SessionCompareView: View {
                 timingDiffRow("Clustering (ms)", left: ld.clusteringTime, right: rd.clusteringTime, higherIsBetter: false)
             }
             timingDiffRow("Diarize Total (s)", left: ld.fullPipeline / 1000.0, right: rd.fullPipeline / 1000.0, higherIsBetter: false)
-        } else if #available(macOS 15, iOS 18, *),
-                  let leftSD = left.streamingDiarizationTimings as? StreamingDiarizationTimings,
+        } else if let leftSD = left.streamingDiarizationTimings as? StreamingDiarizationTimings,
                   let rightSD = right.streamingDiarizationTimings as? StreamingDiarizationTimings,
                   leftSD.fullPipeline > 0 || rightSD.fullPipeline > 0 {
             if leftSD.melSpectrogramTime > 0 || rightSD.melSpectrogramTime > 0 {
