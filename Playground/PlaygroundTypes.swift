@@ -5,13 +5,17 @@ import Argmax
 // MARK: - SDK Type Extensions
 
 extension SpeakerInfoStrategy {
+    /// Each word is assigned its own speaker (subsegment with zero gap threshold).
+    static var word: SpeakerInfoStrategy { .subsegment(betweenWordThreshold: 0.0) }
+
     static var allCases: [SpeakerInfoStrategy] {
-        [.segment, .subsegment]
+        [.segment, .subsegment, .word]
     }
 
     var stringValue: String {
         switch self {
         case .segment: return "segment"
+        case .subsegment(let t) where t == 0.0: return "word"
         case .subsegment: return "subsegment"
         @unknown default: return "subsegment"
         }
@@ -20,6 +24,7 @@ extension SpeakerInfoStrategy {
     var displayName: String {
         switch self {
         case .segment: return "Segment"
+        case .subsegment(let t) where t == 0.0: return "Word"
         case .subsegment: return "Subsegment"
         @unknown default: return "Unknown"
         }
@@ -156,6 +161,24 @@ extension View {
     }
 }
 
+// MARK: - Focus Mode
+
+/// `true` while a tab view is presented inside the iOS focus-mode cover.
+///
+/// Focus mode puts the "Playground / by Argmax" label in the leading toolbar slot, and the tab's
+/// own three-to-four trailing icons merge into that same bar and crowd it out on a narrow top bar.
+/// Tab views read this to fold those icons into a single overflow menu instead.
+private struct IsFocusModeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isFocusMode: Bool {
+        get { self[IsFocusModeKey.self] }
+        set { self[IsFocusModeKey.self] = newValue }
+    }
+}
+
 // MARK: - Constants
 
 enum AudioConstants {
@@ -217,13 +240,18 @@ struct SettingsSnapshot: Equatable {
     let decoderComputeUnits: String
     let diarizationMode: String
     let speakerInfoStrategy: String
-    let minNumOfSpeakers: Int
+    /// `nil` when the UI is set to "Auto"; the sentinel encoding stays in the persistence layer.
+    /// SDK callers that need an int should branch on `nil` themselves.
+    let minNumOfSpeakers: Int?
     let enableCustomVocabulary: Bool
     let customVocabularyWords: [String]
 
     var diffDescription: String {
         var parts: [String] = []
-        let modelShort = whisperKitModel.components(separatedBy: "_").dropFirst().joined(separator: " ")
+        // Drop the vendor prefix from underscored names ("openai_whisper-large-v3" ->
+        // "whisper-large-v3"); names without one ("qwen3-asr") are already short.
+        let components = whisperKitModel.components(separatedBy: "_")
+        let modelShort = components.count > 1 ? components.dropFirst().joined(separator: " ") : whisperKitModel
         parts.append("Transcription: \(modelShort)")
         if diarizationModel != "none" {
             let diarizationDisplay = DiarizationModelSelection(rawValue: diarizationModel)?.displayName ?? diarizationModel
@@ -251,6 +279,59 @@ enum SessionMode: String {
     case transcribeRecord = "Record"
 }
 
+// MARK: - Stream Trace
+
+struct StreamTraceEntry: Codable {
+    let wallOffset: TimeInterval
+    let confirmedText: String
+    let hypothesisText: String
+    let computeTime: TimeInterval?
+    let specDecTokensPerStep: Double?
+    let audioSeconds: TimeInterval?
+    let runningRTF: Double?
+}
+
+struct StreamTrace: Codable {
+    let model: String
+    let startedAt: Date
+    let entries: [StreamTraceEntry]
+
+    /// Serializes a trace to a temp-directory JSON file and returns its URL (nil on failure).
+    /// Shared by the stream and file/record transcription paths so every session can export
+    /// a replay trace.
+    static func write(model: String, startedAt: Date, entries: [StreamTraceEntry]) -> URL? {
+        let trace = StreamTrace(model: model, startedAt: startedAt, entries: entries)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(trace) else { return nil }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("trace_\(UUID().uuidString).json")
+        guard (try? data.write(to: url)) != nil else { return nil }
+        return url
+    }
+
+    /// Reconstructs progressive trace entries from a finished result's segments, timing each
+    /// entry to its segment's end (audio) time with cumulative confirmed text. Used by the
+    /// file/record transcription paths, which produce a single final result rather than a live
+    /// stream of hypothesis/confirmed updates.
+    static func entries(fromSegments segments: [TranscriptionSegment]) -> [StreamTraceEntry] {
+        var cumulative = ""
+        return segments.map { segment in
+            cumulative += segment.text
+            return StreamTraceEntry(
+                wallOffset: TimeInterval(segment.end),
+                confirmedText: cumulative,
+                hypothesisText: "",
+                computeTime: nil,
+                specDecTokensPerStep: nil,
+                audioSeconds: TimeInterval(segment.end),
+                runningRTF: nil
+            )
+        }
+    }
+}
+
 struct SessionRecord: Identifiable {
     let id: UUID
     let timestamp: Date
@@ -270,12 +351,17 @@ struct SessionRecord: Identifiable {
     var diarizationDurationMs: Double?
 
     var audioFileURL: URL?
+    var traceFileURL: URL?
     var audioDuration: TimeInterval
 
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
     var displayTitle: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        let timeStr = formatter.string(from: timestamp)
+        let timeStr = Self.timeFormatter.string(from: timestamp)
         if mode == .transcribeFile {
             return "\(timeStr) - \(sourceDescription)"
         }
@@ -372,11 +458,10 @@ func formatTimingSeconds(_ label: String, seconds: Double) -> String {
     return String(format: "%-24s %8.3f s", (label as NSString).utf8String!, seconds)
 }
 
-// TODO: Make SpeakerSegment.init public in the SDK so we can construct SpeakerSegment
-// directly from WordWithSpeaker data and remove DisplaySpeakerSegment + wordsWithSpeakers field.
-
 /// A lightweight speaker segment for display in session history,
-/// grouping consecutive words from the same speaker.
+/// grouping consecutive words from the same speaker. Exists because `SpeakerSegment.init`
+/// is internal to the SDK -- once that initializer is made public, this struct + the
+/// `wordsWithSpeakers` field on `SessionRecord` can be collapsed.
 struct DisplaySpeakerSegment: Identifiable {
     let id = UUID()
     let speakerId: Int?

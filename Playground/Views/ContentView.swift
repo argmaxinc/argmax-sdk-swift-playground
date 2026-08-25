@@ -8,6 +8,21 @@ import ArgmaxSecrets
 #endif
 import AppKit
 #endif
+#if os(macOS)
+/// Lets tab views open the embedded Settings pane without owning ContentView's state.
+/// Tab toolbars need the Settings button *after* their own items to match iOS ordering.
+private struct OpenSettingsActionKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var openPlaygroundSettings: () -> Void {
+        get { self[OpenSettingsActionKey.self] }
+        set { self[OpenSettingsActionKey.self] = newValue }
+    }
+}
+#endif
+
 /// Slim routing shell for the Playground app.
 /// All feature-specific logic lives in dedicated tab views.
 struct ContentView: View {
@@ -26,19 +41,25 @@ struct ContentView: View {
     #endif
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isTranscriptionFullscreen = false
+    #if os(macOS)
+    // On iOS the sidebar header owns the settings button; macOS hides that header, so the
+    // window toolbar provides the entry point instead.
+    @State private var showSettings = false
+    #endif
 
     init(analyticsLogger: AnalyticsLogger = NoOpAnalyticsLogger()) {
         self.analyticsLogger = analyticsLogger
     }
 
     var body: some View {
-        Group {
-            if isTranscriptionFullscreen {
-                fullscreenView
-            } else {
-                mainNavigation
-            }
-        }
+        // `mainNavigation` is now always the root. On iOS the focus mode lifts into a
+        // `.fullScreenCover` modifier; on macOS we hide the sidebar via `columnVisibility`
+        // instead of swapping in a hand-rolled overlay. See `focusModeCover` and the toolbar
+        // button in `mainNavigation` for the entry points.
+        mainNavigation
+            #if os(iOS)
+            .fullScreenCover(isPresented: $isTranscriptionFullscreen) { focusModeCover }
+            #endif
         .onAppear {
             #if os(macOS)
             if selectedFeature == nil { selectedFeature = .transcribe }
@@ -72,6 +93,17 @@ struct ContentView: View {
             }
             #endif
         }
+        #if os(iOS)
+        .onChange(of: sdkCoordinator.pipelineRows) { _, rows in
+            let isSessionActive = streamViewModel.isStreaming || transcribeViewModel.isTranscribing
+            Task {
+                await streamViewModel.liveActivityManager.handleModelStateChange(
+                    pipelineRows: rows,
+                    isSessionActive: isSessionActive
+                )
+            }
+        }
+        #endif
         .task {
             await sdkCoordinator.updateModelList()
             if !sdkCoordinator.availableModelNames.contains(settings.selectedModel) {
@@ -91,9 +123,27 @@ struct ContentView: View {
             )
             .navigationSplitViewColumnWidth(min: 300, ideal: 350)
         } detail: {
-            detailView
+            detailPane
+                #if os(macOS)
+                .environment(\.openPlaygroundSettings, { showSettings = true })
+                #endif
                 .toolbar {
-                    if selectedFeature == .transcribe || selectedFeature == .stream {
+                    #if os(macOS)
+                    // The transcribe/stream tabs place their own Settings button last (matching
+                    // iOS ordering); this one covers History and the empty selection. Hidden
+                    // while Settings occupies the detail column -- Done is the way back.
+                    if !showSettings && selectedFeature != .transcribe && selectedFeature != .stream {
+                        ToolbarItem {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "slider.horizontal.3")
+                            }
+                            .keyboardShortcut(",", modifiers: .command)
+                        }
+                    }
+                    #endif
+                    if (selectedFeature == .transcribe || selectedFeature == .stream) && !isShowingEmbeddedSettings {
                         ToolbarItem {
                             Button {
                                 let text = copyableText()
@@ -108,7 +158,15 @@ struct ContentView: View {
                             }
                         }
                         ToolbarItem {
-                            Button { isTranscriptionFullscreen = true } label: {
+                            Button {
+                                #if os(iOS)
+                                isTranscriptionFullscreen = true
+                                #elseif os(macOS)
+                                withAnimation {
+                                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                                }
+                                #endif
+                            } label: {
                                 Label("Fullscreen", systemImage: "arrow.up.left.and.arrow.down.right")
                             }
                             .keyboardShortcut("f", modifiers: .command)
@@ -117,6 +175,32 @@ struct ContentView: View {
                 }
         }
         .navigationTitle("Argmax Playground")
+    }
+
+    /// Detail column content. On macOS the toolbar settings button swaps Settings into the detail
+    /// column in place of the selected feature (no modal); iOS presents Settings as a
+    /// sheet from the sidebar header instead.
+    @ViewBuilder
+    private var detailPane: some View {
+        #if os(macOS)
+        if showSettings {
+            SettingsView(isPresented: $showSettings, isStreamMode: selectedFeature == .stream)
+        } else {
+            detailView
+        }
+        #else
+        detailView
+        #endif
+    }
+
+    /// Whether the detail column is currently showing embedded Settings (macOS only), which
+    /// hides the transcription-specific toolbar items.
+    private var isShowingEmbeddedSettings: Bool {
+        #if os(macOS)
+        return showSettings
+        #else
+        return false
+        #endif
     }
 
     // MARK: - Detail Routing
@@ -141,47 +225,37 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Fullscreen
+    // MARK: - Focus Mode (iOS)
 
-    private var fullscreenView: some View {
-        ZStack(alignment: .topTrailing) {
-            #if os(iOS)
-            VStack(spacing: 0) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Playground")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        Text("by Argmax")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .offset(x: 2, y: -2)
-                    }
-                    Spacer()
-                    Button { isTranscriptionFullscreen = false } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal)
-                .padding(.top)
-
-                detailView
-            }
-            #else
+    #if os(iOS)
+    private var focusModeCover: some View {
+        NavigationStack {
             detailView
-            Button { isTranscriptionFullscreen = false } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title)
-                    .foregroundColor(.secondary)
-                    .padding()
-            }
-            .buttonStyle(.plain)
-            #endif
+                // Tells the tab views to collapse their trailing icons into one overflow menu so
+                // the branded label below keeps the leading slot.
+                .environment(\.isFocusMode, true)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Playground")
+                                .font(.headline)
+                            Text("by Argmax")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { isTranscriptionFullscreen = false } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.secondary)
+                        }
+                        .accessibilityLabel("Exit focus mode")
+                    }
+                }
         }
     }
+    #endif
 
     // MARK: - Helpers
 
@@ -195,6 +269,9 @@ struct ContentView: View {
         case .realtime, .prerecorded:
             effectiveMode = userMode
         }
+        // Sortformer mode is applied at load and on feature switches; before the model is
+        // loaded there is nothing to configure (and the SDK would just throw).
+        guard sdkCoordinator.isSortformerLoaded else { return }
         do {
             try sdkCoordinator.configureSortformerMode(effectiveMode)
         } catch {

@@ -34,6 +34,7 @@ class AudioPlayer: ObservableObject {
 
     func play() {
         #if os(iOS)
+        // iOS needs an active playback session before starting.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
@@ -108,7 +109,9 @@ struct AudioPlaybackView: View {
                         .font(.title3)
                 }
                 .buttonStyle(.borderless)
-                .frame(width: 36, height: 36)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Skip back 5 seconds")
 
                 Button {
                     player.toggle()
@@ -117,7 +120,9 @@ struct AudioPlaybackView: View {
                         .font(.title)
                 }
                 .buttonStyle(.borderless)
-                .frame(width: 36, height: 36)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
                 Button {
                     player.seek(to: min(player.duration, player.currentTime + 5))
@@ -126,7 +131,9 @@ struct AudioPlaybackView: View {
                         .font(.title3)
                 }
                 .buttonStyle(.borderless)
-                .frame(width: 36, height: 36)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Skip forward 5 seconds")
 
                 Spacer()
 

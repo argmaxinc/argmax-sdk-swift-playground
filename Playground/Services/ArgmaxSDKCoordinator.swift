@@ -2,7 +2,9 @@ import Argmax
 import CoreML
 import Foundation
 import Combine
+import Network
 import SwiftUI
+import UserNotifications
 
 /// A central `ObservableObject` that manages all Argmax SDK components including model loading,
 /// transcription, and speaker diarization.
@@ -27,21 +29,71 @@ import SwiftUI
 ///
 /// ## Related SDK Objects
 ///
-/// - **WhisperKit:** Core transcription engine that consumes raw audio and outputs segmented, timestamped text (used as `WhisperKitPro` for advanced streaming support)
-/// - **SpeakerKit:** Diarization engine that distinguishes speakers in audio, loaded alongside WhisperKit when needed for multi-speaker transcripts
+/// - **WhisperKit:** Core transcriber that consumes raw audio and outputs segmented, timestamped text (used as `WhisperKitPro` for advanced streaming support)
+/// - **SpeakerKit:** Diarizer that distinguishes speakers in audio, loaded alongside WhisperKit when needed for multi-speaker transcripts
 /// - **LiveTranscriber:** High-level component that wraps WhisperKit for real-time streaming transcription, automatically initialized when `whisperKit` is set
 /// - **ModelStore:** Manages available model metadata, repositories, and downloads throughout the coordinator lifecycle
+/// Marked `@MainActor` so every member (and the extensions in `ModelLoader.swift`,
+/// `PipelineRowManager.swift`, `BackgroundDownloadTestHarness.swift`) is main-actor isolated by
+/// default. Genuine background work (filesystem walks, hash verification, model loading)
+/// dispatches via explicit `Task.detached { ... }.value` or actor-isolated SDK helpers; the
+/// previous mix of `Task { @MainActor in ... }`, `DispatchQueue.main.async`, and
+/// `await MainActor.run` is collapsed where the compiler now enforces the threading model.
+@MainActor
 final class ArgmaxSDKCoordinator: ObservableObject {
     // MARK: - Published Properties
-    @Published public private(set) var whisperKitModelState: ModelState = .unloaded
-    @Published public private(set) var speakerKitModelState: ModelState = .unloaded
+    /// Internal setter so the `ModelLoader` extension can drive state transitions during a load.
+    /// External callers still see it as read-only.
+    @Published public internal(set) var whisperKitModelState: ModelState = .unloaded {
+        didSet { syncModelState(.transcription, whisperKitModelState) }
+    }
+    @Published public internal(set) var speakerKitModelState: ModelState = .unloaded {
+        didSet { syncModelState(.diarization, speakerKitModelState) }
+    }
     @Published public var modelDownloadFailed: Bool = false
     @Published public var availableModelNames: [String] = []
-    
+
+    /// Per-role list of files that failed SHA-256 verification in the most recent prepare attempt.
+    /// Drives the "Repair" affordance on `.failed` rows -- distinct from "Retry", which wipes
+    /// the whole model. Cleared on successful repair or explicit delete.
+    @Published public internal(set) var contentMismatchFiles: [DownloadRole: [String]] = [:]
+
     /// Tracks which diarization model is currently loaded (nil if none)
-    @Published public private(set) var loadedDiarizationModel: DiarizationModelSelection?
+    @Published public internal(set) var loadedDiarizationModel: DiarizationModelSelection?
     /// Tracks which diarization model was requested during the last prepare() call
-    @Published public private(set) var requestedDiarizationModel: DiarizationModelSelection?
+    @Published public internal(set) var requestedDiarizationModel: DiarizationModelSelection?
+
+    /// Whether the currently loaded transcription model was initialized with Inverse Text Normalization
+    /// enabled. Nil when no model is loaded. Used to detect setting/loaded-state mismatches.
+    @Published public internal(set) var loadedITNEnabled: Bool? = nil
+
+    // MARK: - Per-pipeline status tracking
+
+    /// One row per model pipeline the current configuration uses (transcription always; diarization
+    /// when a diarization model is selected; custom vocabulary when enabled). Drives the sidebar
+    /// "Models" panel. Rebuilt by `syncPipelineRows(...)` whenever the selection changes and updated
+    /// in place by the active-download sink and the `ModelState` callbacks during a load.
+    @Published public internal(set) var pipelineRows: [ModelPipelineRow] = []
+
+    /// `true` between the "Load Models" tap and the load finishing (or parking on Wi-Fi).
+    @Published var modelLoadInProgress = false
+
+    /// The model selection the panel rows were last built for. Lets the coordinator re-derive the
+    /// rows after a load/delete without the caller having to re-pass `AppSettings`.
+    var pipelineSelection: (transcriptionModel: String, diarizationModel: DiarizationModelSelection?, customVocabularyModel: CustomVocabularyModelSelection?) = ("", nil, nil)
+
+    /// Set when the user taps "Load Models" while Wi-Fi-only is on and the active path is
+    /// cellular-only (or otherwise unsatisfied). The UI presents a "wait vs use cellular" prompt;
+    /// resolving it (or cancelling) clears this back to `nil`.
+    @Published public var pendingCellularDecision: PendingCellularDecision?
+
+    /// Late-binding handle for `PlaygroundAppDelegate` to reach the coordinator during a
+    /// background URL-session relaunch. Assigned by the `Playground` App owner during
+    /// initialization -- not as a side effect of this type's `init`. The OS may wake the app
+    /// in the background before any SwiftUI scene runs, and `@UIApplicationDelegateAdaptor`
+    /// constructs the delegate via a no-arg init, so we can't inject through the constructor;
+    /// this single, documented escape hatch is the trade-off.
+    public static weak var shared: ArgmaxSDKCoordinator?
 
     // MARK: - Derived State
 
@@ -61,10 +113,70 @@ final class ArgmaxSDKCoordinator: ObservableObject {
         whisperKitModelState != .unloaded
     }
 
+    /// Language support of the currently loaded transcription model, or `nil` when none is loaded.
+    /// Read from SDK types on the loaded model (Parakeet tokenizer subclass -> `ParakeetVariant`;
+    /// otherwise Whisper via `modelVariant.isMultilingual`) rather than parsed from the model name,
+    /// so the language picker reflects what the model actually supports.
+    var loadedModelLanguageInfo: LoadedModelLanguageInfo? {
+        guard whisperKitModelState == .loaded else { return nil }
+        // Qwen runs as its own transcriber (no `whisperKit`); when it's loaded, report the Qwen family.
+        // Qwen3-ASR is multilingual and supports language hinting. Its supported set only partially
+        // overlaps Whisper's code map, so expose the names explicitly rather than via codes.
+        if qwen != nil {
+            return LoadedModelLanguageInfo(
+                family: .qwen,
+                supportedLanguageCodes: [],
+                supportedLanguageNames: AppSettings.qwenSupportedLanguageNames
+            )
+        }
+        guard let whisperKit else { return nil }
+        // All Parakeet tokenizers subclass `Parakeetv2Tokenizer`; JA and V3 are further subclasses.
+        if let tokenizer = whisperKit.tokenizer, tokenizer is Parakeetv2Tokenizer {
+            let variant: ParakeetVariant = tokenizer is ParakeetJATokenizer ? .ja
+                : tokenizer is Parakeetv3Tokenizer ? .v3
+                : .v2
+            return LoadedModelLanguageInfo(family: .parakeet, supportedLanguageCodes: variant.supportedLanguageCodes)
+        }
+        let codes = whisperKit.modelVariant.isMultilingual ? Array(Constants.languageCodes) : ["en"]
+        return LoadedModelLanguageInfo(family: .whisper, supportedLanguageCodes: codes)
+    }
+
     var areModelsReady: Bool {
         guard whisperKitModelState == .loaded else { return false }
         guard let requested = requestedDiarizationModel else { return true }
         return speakerKitModelState == .loaded && loadedDiarizationModel == requested
+    }
+
+    /// `true` only when every enabled pipeline row is `.loaded` -- drives the "Unload Models" button.
+    /// Disabled rows (e.g. diarization = None) don't participate. A custom-vocabulary row in
+    /// `.failed` state counts as resolved too: it represents a config incompatibility (transcription
+    /// model isn't Parakeet) that the user can only fix by unloading and picking a different model,
+    /// so we need "Unload Models" to remain reachable.
+    var allPipelinesLoaded: Bool {
+        let enabled = pipelineRows.filter { $0.isEnabled }
+        guard !enabled.isEmpty else { return false }
+        return enabled.allSatisfy { row in
+            if row.state == .loaded { return true }
+            if row.role == .customVocabulary, case .failed = row.state { return true }
+            return false
+        }
+    }
+
+    /// `true` if any enabled row needs the user to act (resume, retry, download, load) -- shows the
+    /// global "Load Models" button. In-flight and `.loaded` rows are never actionable. While a load
+    /// runs, `.notDownloaded`/`.downloaded` rows are queued work, not user work (the Qwen flow
+    /// loads its diarization companion sequentially); `.paused` stays actionable because the button
+    /// tap resumes it. A custom-vocabulary `.failed` only recovers via model reselection.
+    var hasActionableRow: Bool {
+        pipelineRows.contains { row in
+            guard row.isEnabled else { return false }
+            switch row.state {
+            case .paused, .incomplete, .unverified: return true
+            case .notDownloaded, .downloaded: return !modelLoadInProgress
+            case .failed: return row.role != .customVocabulary
+            case .downloading, .specializing, .loading, .waitingForWifi, .loaded, .verifying: return false
+            }
+        }
     }
 
     var isLoading: Bool {
@@ -80,7 +192,7 @@ final class ArgmaxSDKCoordinator: ObservableObject {
     }
 
     // MARK: - Argmax API objects
-    public private(set) var whisperKit: WhisperKitPro? {
+    public internal(set) var whisperKit: WhisperKitPro? {
         didSet {
             if let wk = whisperKit {
                 liveTranscriber = LiveTranscriber(whisperKit: wk)
@@ -90,25 +202,55 @@ final class ArgmaxSDKCoordinator: ObservableObject {
         }
     }
     
-    /// The active diarization engine (either Pyannote or Sortformer)
-    public private(set) var speakerKit: SpeakerKitPro?
+    /// The active diarizer (either Pyannote or Sortformer)
+    public internal(set) var speakerKit: SpeakerKitPro?
     
     public private(set) var liveTranscriber: LiveTranscriber?
-    public let modelStore: ModelStore
-    private let keyProvider: APIKeyProvider
+
+    /// The Qwen3-ASR transcriber, loaded *instead of* ``whisperKit`` when the user selects a Qwen
+    /// model. Created with `WhisperKitPro(.qwen3ASR(...))`. Only one of ``whisperKit`` / ``qwen``
+    /// is ever non-nil at a time.
+    public internal(set) var qwen: WhisperKitPro?
+    /// `ModelStore` is the SDK's download/cache surface. Kept internal (not public) to keep
+    /// view code consuming the coordinator's published state where possible; the few external
+    /// reads that remain (AppDelegate's background URL session forwarding, the model-list
+    /// picker in `SidebarView`) are intentional escape hatches for now.
+    let modelStore: ModelStore
+    let keyProvider: APIKeyProvider
     
     // MARK: - properties
-    private var apiKey: String? = nil
+    /// Internal so `ModelLoader.prepare` can validate before kicking off a download. Not exposed
+    /// publicly -- no consumer needs to read the credential after `setupArgmax()` succeeds.
+    var apiKey: String? = nil
     private var cancellables = Set<AnyCancellable>()
     
     
     public init(
         whisperKitConfig: WhisperKitProConfig = WhisperKitProConfig(),
-        keyProvider: APIKeyProvider
+        keyProvider: APIKeyProvider,
+        logLevel: Logging.LogLevel? = nil
     ) {
+        // Default to `.info` in Release and `.debug` in Debug. Host apps that need verbose
+        // SDK output can pass an explicit `logLevel`; production builds stay quiet.
+        let resolvedLogLevel: Logging.LogLevel = {
+            if let logLevel { return logLevel }
+            #if DEBUG
+            return .debug
+            #else
+            return .info
+            #endif
+        }()
+        Logging.shared.logLevel = resolvedLogLevel
+
         self.keyProvider = keyProvider
         self.modelStore = ModelStore(whisperKitConfig: whisperKitConfig)
-        
+
+        // `Self.shared` is no longer assigned here as a side effect of init -- the `Playground`
+        // App owner sets it explicitly after constructing the coordinator. Keeping the
+        // late-binding handle out of `init` removes the "side effect in init" anti-pattern from
+        // the example code while preserving the AppDelegate-reach-back capability that
+        // background URL-session relaunches require.
+
         // Manually chain the objectWillChange publisher from the modelStore
         // to this coordinator. This ensures that any @Published property(.localModels and .availableModels) change
         // in modelStore will also trigger an update for any view observing this coordinator.
@@ -118,318 +260,152 @@ final class ArgmaxSDKCoordinator: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
-        
-    }
-    
-    /// Sets up the Argmax SDK with proper configuration and error handling
-    public func setupArgmax() {
-        if let apiKey = apiKey, !apiKey.isEmpty {
-            return
-        }
-        Task {
-            do {
-                guard let apiKey = keyProvider.apiKey, !apiKey.isEmpty else {
-                    await MainActor.run {
-                        self.whisperKitModelState = .unloaded
-                        self.speakerKitModelState = .unloaded
-                    }
-                    throw ArgmaxError.invalidLicense("Missing API Key")
-                }
-                
-                self.apiKey = apiKey
-                await ArgmaxSDK.with(ArgmaxConfig(apiKey: apiKey))
-                Logging.debug("Setting up ArgmaxSDK")
-                Logging.debug(await ArgmaxSDK.licenseInfo())
-            } catch {
-                await MainActor.run {
-                    modelDownloadFailed = true
-                }
-                Logging.error("Failed to set up ArgmaxSDK: \(error)")
+
+        // Snapshot the active path immediately so the UI doesn't sit at "Active: --" until
+        // the first NWPathMonitor event fires (the monitor only emits on changes).
+        let monitor = modelStore.backgroundDownloadNetworkMonitor
+        let initialPath = monitor.currentPath
+        self.activeNetworkInterfaces = monitor.activeInterfaceTypes
+        self.isNetworkSatisfied = initialPath.status == .satisfied
+
+        // Subscribe via the SDK's existing monitor -- no second NWPathMonitor needed.
+        // The callback fires on a background queue; hop to the main actor to mutate
+        // `@Published` state.
+        networkPathHandlerId = monitor.addPathUpdateHandler { [weak self] path in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let candidates: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet, .loopback, .other]
+                self.activeNetworkInterfaces = candidates.filter { path.usesInterfaceType($0) }
+                self.isNetworkSatisfied = path.status == .satisfied
             }
         }
+
+        // Drive the per-model download panel from the SDK's active-downloads list.
+        modelStore.backgroundDownloadsPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] states in self?.applyActiveDownloads(states) }
+            .store(in: &cancellables)
+
+        // Reconstruct download-panel items for any download still in progress from a prior run
+        // (e.g. the app was quit mid-download). The SDK auto-resumes `.downloading` and
+        // `.pausedByNetwork` ones itself; `.paused` (user-paused) ones surface with a Resume button.
+        reconstructPipelineRowsFromPersistedState()
+    }
+
+    deinit {
+        if let id = networkPathHandlerId {
+            modelStore.backgroundDownloadNetworkMonitor.removePathUpdateHandler(id)
+        }
+    }
+    
+    /// Sets up the Argmax SDK with proper configuration and error handling. Idempotent -- a
+    /// subsequent call returns immediately if the key has already been wired in. Runs detached:
+    /// this is called from `onAppear` before the first frame, and the SDK setup (keychain
+    /// reads, license validation, telemetry) must not contend with the launch render on the
+    /// main actor. Only the coordinator state writes hop back.
+    public func setupArgmax() {
+        if let apiKey, !apiKey.isEmpty { return }
+        let keyProvider = keyProvider
+        Task.detached(priority: .userInitiated) {
+            guard let apiKey = keyProvider.apiKey, !apiKey.isEmpty else {
+                await MainActor.run { [weak self] in
+                    self?.whisperKitModelState = .unloaded
+                    self?.speakerKitModelState = .unloaded
+                    self?.modelDownloadFailed = true
+                }
+                Logging.error("Failed to set up ArgmaxSDK: \(ArgmaxError.invalidLicense("Missing API Key"))")
+                return
+            }
+            await MainActor.run { [weak self] in self?.apiKey = apiKey }
+            await ArgmaxSDK.with(ArgmaxConfig(apiKey: apiKey))
+            Logging.debug("Setting up ArgmaxSDK")
+            Logging.debug(await ArgmaxSDK.licenseInfo())
+        }
+    }
+
+    /// Re-authenticates the SDK license with a different `ax_` API key, replacing this device's
+    /// current license with one created from the key's account. The key itself is used for this
+    /// process only and never persisted by the app; the license tokens the SDK creates with it
+    /// are stored in the keychain by the SDK and stay active across launches (where the bundled
+    /// key takes over again) until they expire or another re-authentication replaces them.
+    ///
+    /// The caller must have validated the `ax_` prefix -- `ArgmaxConfig.init` traps on other
+    /// prefixes.
+    public func reauthenticate(apiKey newKey: String) async -> LicenseInfo {
+        // Order matters. `reset(includingLicense: true)` clears the keychain license tokens but
+        // is a no-op once the SDK is closed -- and it must run, because `with()` short-circuits
+        // on still-valid keychain tokens and would never exercise the new key. `close()` then
+        // drops `enabled` so `with()` performs a full setup instead of returning early.
+        await ArgmaxSDK.reset(includingLicense: true)
+        await ArgmaxSDK.close()
+        apiKey = newKey
+        await ArgmaxSDK.with(ArgmaxConfig(apiKey: newKey))
+        let info = await ArgmaxSDK.licenseInfo()
+        Logging.debug("Re-authenticated ArgmaxSDK with user-provided key")
+        Logging.debug(info)
+        return info
     }
 
     // MARK: - Model Management
     
-    /// Updates the list of available models from configured repositories
+    /// Updates the list of available models from configured repositories.
     public func updateModelList() async {
         await modelStore.updateAvailableModels(from: targetRepositories, keyProvider: keyProvider)
-        
-        await MainActor.run {
-            availableModelNames = modelStore.availableModels.flatMap(\.models).map(\.description)
+        var names = modelStore.availableModels.flatMap(\.models).map(\.description)
+        // Qwen3-ASR isn't a WhisperKit-store model, so inject it manually on platforms that can
+        // run it (8 GB-and-up iOS 18 devices / Apple Silicon macOS 15). Availability at load time
+        // is validated by the SDK, which throws `ArgmaxError.invalidConfiguration`.
+        if !names.contains(AppSettings.qwenModelName) {
+            names.append(AppSettings.qwenModelName)
         }
-
+        availableModelNames = names
     }
 
-    /// Downloads the CoreML bundle (if needed) and instantiates both WhisperKit and SpeakerKit.
-    /// Call this once per model you want to use; subsequent calls replace the services.
-    /// Pass `nil` for `diarizationModel` to load transcription-only (no SpeakerKit).
-    ///
-    /// Downloads for transcription and diarization models run concurrently.
-    /// Diarization model loading waits until WhisperKit is fully loaded to avoid GPU/Metal contention.
-    @MainActor
-    public func prepare(modelName: String,
-                        repository: String? = nil,
-                        config: WhisperKitProConfig,
-                        redownload: Bool = false,
-                        diarizationModel: DiarizationModelSelection? = nil) async throws {
-        guard let apiKey = apiKey, !apiKey.isEmpty else {
-            self.whisperKitModelState = .unloaded
-            self.speakerKitModelState = .unloaded
-            throw ArgmaxError.invalidLicense("Missing API Key")
-        }
-        self.requestedDiarizationModel = diarizationModel
-        var diarizationDownloadTask: Task<Void, Error>?
-
-        typealias DiarizationLoader = () async throws -> SpeakerKitPro
-        var diarizationLoader: DiarizationLoader?
-
-        do {
-            if let diarizationModel {
-                self.speakerKitModelState = .downloading
-
-                if diarizationModel.isSortformer {
-                    if #available(macOS 15, iOS 18, *) {
-                        let sortformerConfig = SortformerConfig(
-                            modelRepo: "argmaxinc/speakerkit-pro",
-                            streamingConfig: .realtime
-                        )
-                        let manager = SpeakerKitDiarizer.sortformer(config: sortformerConfig)
-                        setupDiarizationManagerCallback(manager)
-
-                        diarizationDownloadTask = Task {
-                            try await manager.downloadModels()
-                            try await manager.loadModels()
-                        }
-
-                        diarizationLoader = {
-                            sortformerConfig.diarizer = manager
-                            sortformerConfig.download = false
-                            return try await SpeakerKitPro(sortformerConfig)
-                        }
-                    } else {
-                        throw ArgmaxError.invalidConfiguration("Sortformer requires macOS 15 or iOS 18")
-                    }
-                } else {
-                    let manager = SpeakerKitDiarizer.pyannote()
-                    setupDiarizationManagerCallback(manager)
-
-                    diarizationDownloadTask = Task { try await manager.downloadModels() }
-
-                    diarizationLoader = {
-                        try await manager.loadModels()
-                        let config = PyannoteConfig(
-                            modelDownloadConfig: ModelDownloadConfig(modelRepo: "argmaxinc/speakerkit-coreml"),
-                            download: false,
-                            load: false,
-                            diarizer: manager
-                        )
-                        return try await SpeakerKitPro(config)
-                    }
-                }
-            }
-
-            let selectedRepository: String
-            if let repository {
-                selectedRepository = repository
-            } else {
-                selectedRepository = await findRepositoryForModel(modelName)
-            }
-            
-            let needsDownload = redownload || !modelStore.modelExists(variant: modelName, from: selectedRepository)
-
-            if needsDownload {
-                self.whisperKitModelState = .downloading
-            }
-
-            let localURL = try await modelStore.downloadModel(
-                name: modelName,
-                repo: selectedRepository,
-                token: keyProvider.huggingFaceToken,
-                redownload: redownload
-            )
-            self.whisperKitModelState = .prewarming
-
-            let whisperKitPro = try await initializeWhisperKitPro(config: config, modelFolder: localURL, modelName: modelName)
-            self.whisperKit = whisperKitPro
-            
-            if let diarizationModel {
-                do {
-                    try await diarizationDownloadTask?.value
-                    if let loader = diarizationLoader {
-                        self.speakerKitModelState = .loading
-                        let speakerKit = try await loader()
-                        self.speakerKit = speakerKit
-                        self.speakerKitModelState = .loaded
-                        self.loadedDiarizationModel = diarizationModel
-                        if diarizationModel.isSortformer {
-                            self.currentSortformerMode = .realtime
-                        }
-                        Logging.debug("[ArgmaxSDKCoordinator] \(diarizationModel.displayName) diarization initialized successfully")
-                    }
-                } catch {
-                    Logging.error("[ArgmaxSDKCoordinator] Diarization model failed, continuing transcription-only: \(error)")
-                    self.speakerKit = nil
-                    self.speakerKitModelState = .unloaded
-                    self.loadedDiarizationModel = nil
-                }
-            } else {
-                self.speakerKit = nil
-                self.speakerKitModelState = .unloaded
-                self.loadedDiarizationModel = nil
-            }
-            
-        } catch {
-            diarizationDownloadTask?.cancel()
-            self.whisperKitModelState = .unloaded
-            self.speakerKitModelState = .unloaded
-            self.whisperKit = nil
-            self.speakerKit = nil
-            self.loadedDiarizationModel = nil
-            Logging.debug("Failed to prepare models:", error)
-            throw error
-        }
-    }
-    
-    /// High-level entry point that reads compute units, custom vocabulary,
-    /// and diarization model from `AppSettings`, then calls `prepare(...)`.
-    func loadModel(_ model: String, redownload: Bool = false, settings: AppSettings) {
-        modelDownloadFailed = false
-
-        let computeUnits = ModelComputeOptions(
-            audioEncoderCompute: settings.encoderComputeUnits,
-            textDecoderCompute: settings.decoderComputeUnits
-        )
-
-        let supportsCustomVocabulary = model.lowercased().contains("parakeet")
-        let shouldEnableCustomVocabulary = supportsCustomVocabulary && settings.enableCustomVocabulary
-
-        Task {
-            do {
-                let customVocabularyConfig: CustomVocabularyConfig? = shouldEnableCustomVocabulary ? .init(words: nil) : nil
-                let proConfig = WhisperKitProConfig(
-                    computeOptions: computeUnits,
-                    verbose: true,
-                    logLevel: .debug,
-                    prewarm: true,
-                    load: false,
-                    useBackgroundDownloadSession: false,
-                    customVocabularyConfig: customVocabularyConfig
-                )
-                try await self.prepare(
-                    modelName: model,
-                    config: proConfig,
-                    redownload: redownload,
-                    diarizationModel: settings.selectedDiarizationModel
-                )
-                await self.updateModelList()
-                await MainActor.run {
-                    self.modelDownloadFailed = false
-                }
-
-                // Read current settings after load completes — user may have edited vocabulary while loading.
-                let currentWords = settings.customVocabularyWords
-                let currentlyEnabled = supportsCustomVocabulary && settings.enableCustomVocabulary
-                if currentlyEnabled && !currentWords.isEmpty {
-                    do {
-                        try await MainActor.run {
-                            try self.updateCustomVocabulary(words: currentWords)
-                        }
-                    } catch {
-                        Logging.error("Failed to update custom vocabulary: \(error)")
-                    }
-                }
-            } catch {
-                Logging.error("Error loading model: \(error)")
-                await MainActor.run {
-                    self.modelDownloadFailed = true
-                }
-            }
-        }
-    }
 
     @Published public var currentCustomVocabularyWords: [String] = []
 
-    @MainActor
-    public func updateCustomVocabulary(words: [String]) throws {
-        guard let whisperKit else {
-            throw ArgmaxError.modelUnavailable("WhisperKit model is not loaded")
-        }
-
-        do {
-            try whisperKit.setCustomVocabulary(words)
-            currentCustomVocabularyWords = words
-        } catch {
-            Logging.error("Failed to update custom vocabulary: \(error)")
-            throw error
-        }
-    }
-
-    public func delete(modelName: String,
-                       repository: String? = nil,
-                       config: WhisperKitConfig? = nil) async throws {
-        do {
-            let selectedRepository: String
-            if let repository {
-                selectedRepository = repository
-            } else {
-                selectedRepository = await findRepositoryForModel(modelName)
-            }
-            try await modelStore.deleteModel(variant: modelName, from: selectedRepository)
-        } catch {
-            throw ArgmaxError.generic("Failed to delete model")
-        }
-    }
-    
-    public func deleteCustomVocabularyModels() async throws {
-        for model in ["canary-1b-v2", "parakeet-tdt_ctc-110m"] {
-            try await modelStore.deleteModel(variant: model, from: "argmaxinc/ctckit-pro")
-        }
-    }
-
-    public func reset() async {
-        modelStore.cancelDownload()
-        await whisperKit?.unloadModels()
-        await speakerKit?.unloadModels()
-        await MainActor.run {
-            whisperKit = nil
-            speakerKit = nil
-            whisperKitModelState = .unloaded
-            speakerKitModelState = .unloaded
-            loadedDiarizationModel = nil
-            requestedDiarizationModel = nil
-        }
-    }
-    
     /// The currently configured Sortformer streaming mode.
     /// This is tracked by the coordinator and passed to sessions when they are created.
     @MainActor
     public var currentSortformerMode: SortformerModeSelection = .realtime
 
-    /// Updates the Sortformer streaming mode configuration.
-    /// Only affects new streaming sessions — active sessions keep their original configuration.
-    /// - Parameter mode: The new Sortformer mode to use
-    /// - Throws: Error if Sortformer is not loaded
-    @MainActor
-    public func configureSortformerMode(_ mode: SortformerModeSelection) throws {
-        guard loadedDiarizationModel == .sortformer else {
-            throw ArgmaxError.invalidConfiguration("Sortformer mode can only be configured when Sortformer is loaded")
-        }
-        currentSortformerMode = mode
-        Logging.debug("[ArgmaxSDKCoordinator] Configured Sortformer mode to: \(mode.rawValue)")
-    }
-    
     /// Checks if a diarization model is downloaded locally using the canonical ModelInfo paths
+    /// Whether the given CTC custom-vocabulary variant has files on disk in `argmaxinc/ctckit-pro`.
+    /// Drives the "✓" checkmark in the custom-vocabulary picker; same idea as
+    /// `isDiarizationModelDownloaded(_:)`.
+    /// Whether a transcription model has files on disk. Drives the "✓" in the model picker.
+    /// Qwen lives in its own HF repo that `localModels` doesn't scan, so it gets a direct
+    /// folder check.
+    public func isTranscriptionModelDownloaded(_ model: String) -> Bool {
+        if TranscriptionModelFamily(modelName: model) == .qwen {
+            let folder = modelStore.transcriberFolder(repo: AppSettings.qwenModelRepo)
+                .appendingPathComponent(model, isDirectory: true)
+            let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path)
+            return !(contents ?? []).isEmpty
+        }
+        return modelStore.localModels.flatMap { $0.models }.contains { $0.description == model }
+    }
+
+    public func isCustomVocabularyModelDownloaded(_ model: CustomVocabularyModelSelection) -> Bool {
+        let folder = modelStore.transcriberFolder(repo: model.modelRepo)
+            .appendingPathComponent(model.variant, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else {
+            return false
+        }
+        return !contents.isEmpty
+    }
+
     public func isDiarizationModelDownloaded(_ model: DiarizationModelSelection) -> Bool {
         let baseFolder = modelStore.transcriberFolder(repo: model.modelRepo)
         
         if model.isSortformer {
-            if #available(macOS 15, iOS 18, *) {
-                let modelInfo = ModelInfo.sortformerDefault()
-                let modelPath = modelInfo.modelURL(baseURL: baseFolder)
-                if let contents = try? FileManager.default.contentsOfDirectory(atPath: modelPath.path) {
-                    return contents.contains(where: { $0.contains("MelSpectrogram") || $0.contains("AudioConformer") || $0.contains("Sortformer") })
-                }
+            let modelInfo = ModelInfo.sortformerDefault()
+            let modelPath = modelInfo.modelURL(baseURL: baseFolder)
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: modelPath.path) {
+                return contents.contains(where: { $0.contains("MelSpectrogram") || $0.contains("AudioConformer") || $0.contains("Sortformer") })
             }
             return false
         } else {
@@ -449,153 +425,58 @@ final class ArgmaxSDKCoordinator: ObservableObject {
             return hasBaseModels
         }
     }
-    
-    /// Unloads the current speaker kit (either Pyannote or Sortformer)
-    @MainActor
-    public func unloadSpeakerKit() async {
-        await speakerKit?.unloadModels()
-        speakerKit = nil
-        speakerKitModelState = .unloaded
-        loadedDiarizationModel = nil
-    }
-    
-    // MARK: - Private Helper Methods
 
-    private var targetRepositories: [RepoType] {
-        if #available(macOS 15, iOS 18, watchOS 11, visionOS 2, *) {
-            return [.parakeetRepo, .proRepo]
-        } else {
-            return [.parakeetRepo, .openSourceRepo]
-        }
+
+    // MARK: - Per-model download panel (shared helpers)
+
+    /// CTC repo + variant for the currently selected custom-vocabulary model. The variant is
+    /// chosen by the user via the picker; the repo is the same for both options. Falls back to
+    /// the canary variant when no selection is active -- purely a string fallback so file-path
+    /// callers don't crash when custom vocab is off (those callers gate on `isEnabled` first).
+    var customVocabularyVariant: String {
+        (pipelineSelection.customVocabularyModel ?? .canary).variant
+    }
+    var customVocabularyRepoId: String {
+        (pipelineSelection.customVocabularyModel ?? .canary).modelRepo
     }
 
-    /// Finds the appropriate repository for a given model name
-    private func findRepositoryForModel(_ modelName: String) async -> String {
-        let targetRepositories = self.targetRepositories
-        if let foundRepo = modelStore.findRepository(containing: modelName, in: targetRepositories) {
-            return foundRepo
-        }
-        // TODO: use built-in method for parakeet
-        if modelName.lowercased().contains("parakeet") {
-            return RepoType.parakeetRepo.repoId
-        } else {
-            if #available(macOS 15, iOS 18, watchOS 11, visionOS 2, *) {
-                return RepoType.proRepo.repoId
-            } else {
-                return RepoType.openSourceRepo.repoId
-            }
-        }
-    }
+    // MARK: - Background Download Test (developer tools state)
 
-    /// Creates a consistent model state callback for WhisperKit, mapping internal states to display states
-    private func createWhisperKitModelStateCallback() -> ModelStateCallback {
-        return { [weak self] oldState, newState in
-            Task { @MainActor in
-                let displayState: ModelState
-                switch newState {
-                case .prewarmed: displayState = .loading        // "Specialized" -> still loading into memory
-                case .downloaded: displayState = .prewarming    // "Downloaded" -> "Specializing" (during transcriber init)
-                case .unloading: displayState = .unloaded       // "Unloading" -> treat as unloaded for UI
-                case .unloaded, .loading, .loaded, .prewarming, .downloading: displayState = newState
-                }
-                self?.whisperKitModelState = displayState
-            }
-        }
-    }
-    
-    /// Sets up the model state callback for WhisperKitPro transcriber
-    private func setupWhisperKitModelStateCallback(for transcriber: WhisperKitPro) {
-        transcriber.modelStateCallback = createWhisperKitModelStateCallback()
-    }
-    
-    /// Loads or prewarms models based on configuration
-    private func prepareWhisperKitModels(for whisperKit: WhisperKit, config: WhisperKitProConfig) async throws {
-        let shouldPrewarm = config.prewarm ?? false
-        if shouldPrewarm {
-            try await whisperKit.prewarmModels()
-        }
-        try await whisperKit.loadModels()
-    }
+    /// Stored state for the background download test harness behind Settings > Developer.
+    /// Methods live in `Services/DevTools/BackgroundDownloadTestHarness.swift`; only state
+    /// remains here because Swift extensions can't have stored properties.
+    @Published public var backgroundDownloadTestActive: Bool = false
+    @Published public var backgroundDownloadTestStatus: String = ""
+    /// Determinate progress of the active download (0...1). Driven by `BackgroundDownloader.overallProgress`.
+    @Published public var backgroundDownloadProgress: Double = 0
 
-    /// Initializes and loads a WhisperKitPro transcriber
-    private func initializeWhisperKitPro(config: WhisperKitProConfig, modelFolder: URL, modelName: String) async throws -> WhisperKitPro {
+    var backgroundDownloadCancellable: AnyCancellable?
+    /// `@Published` so SwiftUI re-renders affordances that depend on whether we have a
+    /// download to act on (e.g. enabling/disabling the Verify button).
+    @Published var currentBackgroundDownloadId: String?
 
-        config.modelFolder = modelFolder.path
-        config.load = false
-        let whisperKitPro = try await WhisperKitPro(config)
-        // Set up model state callback and initial state
-        setupWhisperKitModelStateCallback(for: whisperKitPro)
-        // Load or prewarms models
-        try await prepareWhisperKitModels(for: whisperKitPro, config: config)
-        return whisperKitPro
-    }
+    /// Public, read-only mirror of `currentBackgroundDownloadId != nil` for SwiftUI bindings.
+    public var hasCurrentBackgroundDownloadId: Bool { currentBackgroundDownloadId != nil }
+    var notifiedMilestones: Set<String> = []
+    /// Tracks last-emitted status per download so we only log status transitions.
+    var lastLoggedStatus: [String: BackgroundDownloadStatus] = [:]
 
-    private func setupDiarizationManagerCallback(_ manager: SpeakerKitDiarizer) {
-        manager.modelStateCallback = { [weak self] oldState, newState in
-            Task { @MainActor in
-                if newState != .loaded {
-                    self?.speakerKitModelState = newState
-                }
-            }
-        }
-    }
+    /// Whether there's a paused download that can be resumed
+    @Published public var hasPausedDownload: Bool = false
+    /// The model name of the paused download (if any)
+    @Published public var pausedDownloadModel: String?
+
+    /// Persisted log of background download events. Survives app relaunches via UserDefaults so
+    /// the user can review what happened while the app was in the background.
+    @Published public var backgroundEvents: [BackgroundEvent] = BackgroundEvent.load()
+
+    /// Interface types the active network path is currently using. Updated from the SDK's
+    /// `NetworkMonitor` via `addPathUpdateHandler` so the UI can show "Active: Wi-Fi" /
+    /// "Cellular" without standing up a parallel `NWPathMonitor`.
+    @Published public var activeNetworkInterfaces: [NWInterface.InterfaceType] = []
+    /// `true` while the system reports any satisfied path. Drives the connection indicator.
+    @Published public var isNetworkSatisfied: Bool = false
+    private var networkPathHandlerId: NetworkMonitor.PathUpdateHandlerId?
 
 }
 
-// MARK: - Sortformer Configuration Types
-
-/// Selection for Sortformer streaming mode
-enum SortformerModeSelection: String, Sendable {
-    case automatic = "automatic"
-    case realtime = "real-time"
-    case prerecorded = "pre-recorded"
-
-    /// Resolves the effective SDK config. `automatic` is resolved by the caller based on context.
-    @available(macOS 15, iOS 18, *)
-    public func config(isRealtimeMode: Bool) -> SortformerStreamingConfig {
-        switch self {
-        case .automatic:
-            return isRealtimeMode ? .realtime : .prerecorded
-        case .realtime: return .realtime
-        case .prerecorded: return .prerecorded
-        }
-    }
-
-    /// Human-readable label with "(auto)" suffix when the mode is automatically resolved.
-    public func displayLabel(isStream: Bool) -> String {
-        switch self {
-        case .automatic: return isStream ? "Real-time (auto)" : "Pre-recorded (auto)"
-        case .realtime: return "Real-time"
-        case .prerecorded: return "Pre-recorded"
-        }
-    }
-}
-
-/// Selection for diarization model type
-enum DiarizationModelSelection: String, CaseIterable, Sendable {
-    case pyannote4 = "pyannote4"
-    case sortformer = "sortformer"
-
-    public var displayName: String {
-        switch self {
-        case .pyannote4: return "Pyannote v4"
-        case .sortformer: return "Sortformer"
-        }
-    }
-
-    public var isSortformer: Bool {
-        self == .sortformer
-    }
-
-    public var isPyannote: Bool {
-        self == .pyannote4
-    }
-
-    /// The HuggingFace repository for this model
-    public var modelRepo: String {
-        switch self {
-        case .pyannote4: return "argmaxinc/speakerkit-coreml"
-        case .sortformer: return "argmaxinc/speakerkit-pro"
-        }
-    }
-}

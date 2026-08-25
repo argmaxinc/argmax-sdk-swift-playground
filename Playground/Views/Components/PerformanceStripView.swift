@@ -7,7 +7,6 @@ struct StreamDiarizationEntry: Equatable {
     /// Stored as `Any?` for pre-macOS 15 / iOS 18 compatibility; actual type is `StreamingDiarizationTimings`.
     private let _diarizationTimingsBox: Any?
 
-    @available(macOS 15, iOS 18, *)
     var diarizationTimings: StreamingDiarizationTimings? { _diarizationTimingsBox as? StreamingDiarizationTimings }
 
     init(label: String, speakers: Int?, diarizationTimings: Any? = nil) {
@@ -18,10 +17,7 @@ struct StreamDiarizationEntry: Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.label == rhs.label, lhs.speakers == rhs.speakers else { return false }
-        if #available(macOS 15, iOS 18, *) {
-            return lhs.diarizationTimings?.fullPipeline == rhs.diarizationTimings?.fullPipeline
-        }
-        return true
+        return lhs.diarizationTimings?.fullPipeline == rhs.diarizationTimings?.fullPipeline
     }
 }
 
@@ -43,7 +39,6 @@ struct PerformanceStripView: View {
     let streamBreakdown: [StreamDiarizationEntry]?
     let isActive: Bool
 
-    @available(macOS 15, iOS 18, *)
     private var streamingDiarizationTimings: StreamingDiarizationTimings? {
         _streamingDiarizationTimingsBox as? StreamingDiarizationTimings
     }
@@ -114,10 +109,10 @@ struct PerformanceStripView: View {
     private var effectiveDecodingLoops: Int { timings.map { Int($0.totalDecodingLoops) } ?? decodingLoops ?? 0 }
     private var effectivePipelineTime: Double? { timings?.fullPipeline ?? totalPipelineTime }
 
-    private var hasTranscriptionData: Bool { effectiveTPS > 0 }
+    private var hasTranscriptionData: Bool { effectiveTPS > 0 || effectiveSpeed > 0 }
     private var hasDiarizationData: Bool {
         if diarizationTimings != nil { return true }
-        if #available(macOS 15, iOS 18, *), (streamingDiarizationTimings?.fullPipeline ?? 0) > 0 { return true }
+        if (streamingDiarizationTimings?.fullPipeline ?? 0) > 0 { return true }
         if (diarizationDurationMs ?? 0) > 0 { return true }
         if (diarizationSpeakerCount ?? 0) > 0 { return true }
         if (lagFixedWordsCount ?? 0) > 0 { return true }
@@ -127,13 +122,13 @@ struct PerformanceStripView: View {
 
     private var effectiveSpeakerCount: Int? {
         if let count = diarizationTimings?.numberOfSpeakers { return count }
-        if #available(macOS 15, iOS 18, *), let count = streamingDiarizationTimings?.numberOfSpeakers { return count }
+        if let count = streamingDiarizationTimings?.numberOfSpeakers { return count }
         return diarizationSpeakerCount
     }
 
     private var effectiveAudioDuration: Double? {
         if let d = diarizationTimings, d.inputAudioSeconds > 0 { return d.inputAudioSeconds }
-        if #available(macOS 15, iOS 18, *), let sd = streamingDiarizationTimings, sd.inputAudioSeconds > 0 { return sd.inputAudioSeconds }
+        if let sd = streamingDiarizationTimings, sd.inputAudioSeconds > 0 { return sd.inputAudioSeconds }
         return diarizationAudioDuration
     }
 
@@ -141,7 +136,7 @@ struct PerformanceStripView: View {
         if let d = diarizationTimings, d.inputAudioSeconds > 0, d.fullPipeline > 0 {
             return d.inputAudioSeconds / (d.fullPipeline / 1000.0)
         }
-        if #available(macOS 15, iOS 18, *), let sd = streamingDiarizationTimings, sd.inputAudioSeconds > 0, sd.fullPipeline > 0 {
+        if let sd = streamingDiarizationTimings, sd.inputAudioSeconds > 0, sd.fullPipeline > 0 {
             return sd.inputAudioSeconds / (sd.fullPipeline / 1000.0)
         }
         if let dur = diarizationDurationMs, dur > 0, let audio = effectiveAudioDuration, audio > 0 {
@@ -157,8 +152,13 @@ struct PerformanceStripView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
                 } label: {
                     collapsedRow
+                        #if os(iOS)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                        #endif
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded ? "Hide performance details" : "Show performance details")
 
                 if isExpanded {
                     expandedContent
@@ -186,7 +186,9 @@ struct PerformanceStripView: View {
     private var collapsedRowFull: some View {
         HStack(spacing: 8) {
             if hasTranscriptionData {
-                metric(String(format: "%.0f", effectiveTPS), caption: "tok/s")
+                if effectiveTPS > 0 {
+                    metric(String(format: "%.0f", effectiveTPS), caption: "tok/s")
+                }
                 if effectiveSpeed > 0 {
                     metric(String(format: "%.1fx", effectiveSpeed), caption: "speed")
                 }
@@ -194,7 +196,7 @@ struct PerformanceStripView: View {
                     metric(String(format: "%.2fs", effectivePipelineTime), caption: "total")
                 }
             } else if isActive && !hasDiarizationData {
-                Text("—").foregroundColor(.secondary)
+                Text("--").foregroundColor(.secondary)
                 Text("tok/s").foregroundColor(.secondary)
             }
             if hasDiarizationData {
@@ -203,7 +205,7 @@ struct PerformanceStripView: View {
                 }
                 if let diarizationTimings {
                     metric(String(format: "%.2fs", diarizationTimings.fullPipeline / 1000.0), caption: "diarize")
-                } else if #available(macOS 15, iOS 18, *), let sd = streamingDiarizationTimings, sd.fullPipeline > 0 {
+                } else if let sd = streamingDiarizationTimings, sd.fullPipeline > 0 {
                     metric(String(format: "%.0fms", sd.fullPipeline), caption: "diarize")
                 } else if let diarizationDurationMs, diarizationDurationMs > 0 {
                     metric(String(format: "%.2fs", diarizationDurationMs / 1000.0), caption: "diarize")
@@ -229,7 +231,7 @@ struct PerformanceStripView: View {
                     metric(String(format: "%.2fs", effectivePipelineTime), caption: "total")
                 }
             } else if isActive && !hasDiarizationData {
-                Text("—").foregroundColor(.secondary)
+                Text("--").foregroundColor(.secondary)
                 Text("tok/s").foregroundColor(.secondary)
             }
             if hasDiarizationData {
@@ -259,14 +261,16 @@ struct PerformanceStripView: View {
                     pipelineBreakdown(t)
                 }
                 HStack(spacing: 16) {
-                    if let t = timings {
-                        badge("1st Token", value: String(format: "%.2fs", t.firstTokenTime - t.pipelineStart))
+                    if let latency = timings?.firstTokenLatency {
+                        badge("1st Token", value: String(format: "%.2fs", latency))
                         Divider().frame(height: 24)
                     }
-                    badge("Enc Runs", value: "\(effectiveEncodingRuns)")
-                    badge("Dec Loops", value: "\(effectiveDecodingLoops)")
+                    if effectiveEncodingRuns > 0 { badge("Enc Runs", value: "\(effectiveEncodingRuns)") }
+                    if effectiveDecodingLoops > 0 { badge("Dec Loops", value: "\(effectiveDecodingLoops)") }
                     if effectiveSpeed > 0 {
-                        Divider().frame(height: 24)
+                        if effectiveEncodingRuns > 0 || effectiveDecodingLoops > 0 {
+                            Divider().frame(height: 24)
+                        }
                         badge("Speed", value: String(format: "%.1fx", effectiveSpeed))
                     }
                 }
@@ -281,14 +285,12 @@ struct PerformanceStripView: View {
 
                 if let d = diarizationTimings {
                     diarizationBreakdown(d)
-                } else if #available(macOS 15, iOS 18, *), let sd = streamingDiarizationTimings, sd.fullPipeline > 0 {
+                } else if let sd = streamingDiarizationTimings, sd.fullPipeline > 0 {
                     streamingDiarizationBreakdown(sd)
                 } else if let dur = diarizationDurationMs, dur > 0 {
                     diarizationFallbackBreakdown(dur)
                 } else if let streams = streamBreakdown, !streams.isEmpty {
-                    if #available(macOS 15, iOS 18, *) {
-                        streamBreakdownGrid(streams)
-                    }
+                    streamBreakdownGrid(streams)
                 } else {
                     HStack(spacing: 8) {
                         if let spk = effectiveSpeakerCount, spk > 0 { badge("Speakers", value: "\(spk)") }
@@ -305,9 +307,9 @@ struct PerformanceStripView: View {
 
     @ViewBuilder
     private func pipelineBreakdown(_ t: TranscriptionTimings) -> some View {
-        timingRow("Audio Proc", ms: t.audioProcessing * 1000)
-        timingRow("Encoding", ms: t.encoding * 1000)
-        timingRow("Decoding", ms: t.decodingLoop * 1000)
+        if t.audioProcessing > 0 { timingRow("Audio Proc", ms: t.audioProcessing * 1000) }
+        if t.encoding > 0 { timingRow("Encoding", ms: t.encoding * 1000) }
+        if t.decodingLoop > 0 { timingRow("Decoding", ms: t.decodingLoop * 1000) }
         timingRow("Pipeline", ms: t.fullPipeline * 1000)
     }
 
@@ -331,7 +333,6 @@ struct PerformanceStripView: View {
         )
     }
 
-    @available(macOS 15, iOS 18, *)
     @ViewBuilder
     private func streamingDiarizationBreakdown(_ sd: StreamingDiarizationTimings) -> some View {
         if sd.modelLoading > 0 { timingRow("Loading", ms: sd.modelLoading) }
@@ -389,7 +390,7 @@ struct PerformanceStripView: View {
     private var streamCollapsedSpeakers: some View {
         if let streams = streamBreakdown {
             if streams.isEmpty {
-                Text("—").foregroundColor(.secondary)
+                Text("--").foregroundColor(.secondary)
                 Text("spk detected").foregroundColor(.secondary)
             } else if streams.count > 1 {
                 ForEach(streams.indices, id: \.self) { i in
@@ -408,7 +409,6 @@ struct PerformanceStripView: View {
         }
     }
 
-    @available(macOS 15, iOS 18, *)
     @ViewBuilder
     private func streamBreakdownGrid(_ streams: [StreamDiarizationEntry]) -> some View {
         let streamsWithTimings = streams.filter { $0.diarizationTimings != nil }
@@ -495,9 +495,15 @@ extension PerformanceStripView: Equatable {
             lhs.diarizationTimings?.fullPipeline == rhs.diarizationTimings?.fullPipeline &&
             lhs.streamBreakdown == rhs.streamBreakdown
         else { return false }
-        if #available(macOS 15, iOS 18, *) {
-            return lhs.streamingDiarizationTimings?.fullPipeline == rhs.streamingDiarizationTimings?.fullPipeline
-        }
-        return true
+        return lhs.streamingDiarizationTimings?.fullPipeline == rhs.streamingDiarizationTimings?.fullPipeline
+    }
+}
+
+extension TranscriptionTimings {
+    /// Seconds from pipeline start to first token; nil when the pipeline left the timestamps
+    /// at 0 or filler values (only 0.001s...1h counts as a real latency).
+    var firstTokenLatency: Double? {
+        let seconds = firstTokenTime - pipelineStart
+        return (0.001...3600).contains(seconds) ? seconds : nil
     }
 }

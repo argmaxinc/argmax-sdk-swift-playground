@@ -9,6 +9,12 @@ struct TranscribeTabView: View {
     @EnvironmentObject private var sessionHistory: SessionHistoryManager
     @EnvironmentObject private var settings: AppSettings
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isFocusMode) private var isFocusMode
+    #if os(macOS)
+    @Environment(\.openPlaygroundSettings) private var openPlaygroundSettings
+    #endif
+
     @State private var selectedMode: TabMode = .transcription
     @State private var isRecording = false
     @State private var isFilePickerPresented = false
@@ -17,6 +23,17 @@ struct TranscribeTabView: View {
     @State private var recordStartTime: Date?
     @State private var transcriptionSignatureOnOpen: String = ""
     @State private var diarizationSignatureOnOpen: String = ""
+    /// In-flight text field state for the speaker-rename alert. View-layer state, not VM
+    /// state -- the VM only exposes a `pendingSpeakerRename: Int?` intent.
+    @State private var speakerRenameDraft: String = ""
+
+    /// User-visible message for the most recent operation failure (file copy, mic permission,
+    /// audio-session activation). Setting it to non-nil presents the error alert; the user
+    /// dismissing the alert clears it.
+    @State private var operationErrorMessage: String?
+    /// Stores the in-flight permission+recording-start Task so it can be cancelled
+    /// on Stop or a rapid second tap before startRecordAudio() runs.
+    @State private var recordingTask: Task<Void, Never>?
 
     @State private var tokensPerSecond: TimeInterval = 0
     @State private var firstTokenTime: TimeInterval = 0
@@ -28,12 +45,29 @@ struct TranscribeTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TranscribeResultView(
-                selectedMode: $selectedMode,
-                isRecording: $isRecording
-            )
+            // Show the dedicated dictation UI during recording and while results render.
+            // The regular result view (segments, diarization, progress bar) is suppressed
+            // for the Qwen dictation path so only fast/exact-final panels appear.
+            if sdkCoordinator.qwen != nil,
+               isRecording || transcribeViewModel.dictationFastFinalText != nil {
+                QwenDictationResultView(isRecording: isRecording)
+            } else {
+                TranscribeResultView(
+                    selectedMode: $selectedMode,
+                    isRecording: $isRecording
+                )
+            }
 
             Divider()
+
+            // Only show perf metrics once finish() has completed (totalSeconds is set).
+            if sdkCoordinator.qwen != nil,
+               transcribeViewModel.qwenMetrics?.totalSeconds != nil {
+                QwenMetricsView(
+                    metrics: transcribeViewModel.qwenMetrics,
+                    isActive: transcribeViewModel.isTranscribing
+                )
+            }
 
             TranscribeControlsArea(
                 selectedMode: $selectedMode,
@@ -50,7 +84,7 @@ struct TranscribeTabView: View {
                 lastDiarizationDurationMs: transcribeViewModel.lastDiarizationDurationMs,
                 diarizedSpeakerCount: transcribeViewModel.diarizedSpeakerSegments.isEmpty ? nil : Set(transcribeViewModel.diarizedSpeakerSegments.compactMap { $0.speaker.speakerId }).count,
                 audioSampleDuration: transcribeViewModel.audioSampleDuration,
-                onToggleRecording: { withAnimation { toggleRecording() } },
+                onToggleRecording: { withAnimation(reduceMotion ? nil : .default) { toggleRecording() } },
                 onSpeakerCountChange: { newValue in
                     settings.minSpeakerCountRaw = newValue == 0 ? -1 : newValue
                     rerunDiarizationOnly()
@@ -64,24 +98,58 @@ struct TranscribeTabView: View {
             onCompletion: handleFilePicker
         )
         .toolbar {
-            ToolbarItem {
-                Button { resetState() } label: {
-                    Label("New Session", systemImage: "plus")
+            if isFocusMode {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button { resetState() } label: {
+                            Label("New Session", systemImage: "plus")
+                        }
+                        Button { showExportSheet = true } label: {
+                            Label("Export", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(!transcribeViewModel.hasConfirmedResults)
+                        #if os(iOS)
+                        Button { showAdvancedOptions.toggle() } label: {
+                            Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+                        #else
+                        Button { openPlaygroundSettings() } label: {
+                            Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+                        #endif
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
                 }
-                .help("Start new session")
-            }
-            ToolbarItem {
-                // Isolated so that unrelated ViewModel publishes don't re-render
-                // the Export button and trigger ResolvedButtonStyle churn.
-                TranscribeExportButton(
-                    hasResults: transcribeViewModel.hasConfirmedResults,
-                    onTap: { showExportSheet = true }
-                ).equatable()
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showAdvancedOptions.toggle() } label: {
-                    Label("Settings", systemImage: "slider.horizontal.3")
+            } else {
+                ToolbarItem {
+                    Button { resetState() } label: {
+                        Label("New Session", systemImage: "plus")
+                    }
+                    .help("Start new session")
                 }
+                ToolbarItem {
+                    // Isolated so that unrelated ViewModel publishes don't re-render
+                    // the Export button and trigger ResolvedButtonStyle churn.
+                    TranscribeExportButton(
+                        hasResults: transcribeViewModel.hasConfirmedResults,
+                        onTap: { showExportSheet = true }
+                    ).equatable()
+                }
+                #if os(iOS)
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showAdvancedOptions.toggle() } label: {
+                        Label("Settings", systemImage: "slider.horizontal.3")
+                    }
+                }
+                #else
+                ToolbarItem {
+                    Button { openPlaygroundSettings() } label: {
+                        Label("Settings", systemImage: "slider.horizontal.3")
+                    }
+                    .keyboardShortcut(",", modifiers: .command)
+                }
+                #endif
             }
         }
         .sheet(isPresented: $showExportSheet) {
@@ -91,20 +159,15 @@ struct TranscribeTabView: View {
                 speakerSegments: transcribeViewModel.diarizedSpeakerSegments.isEmpty ? nil : transcribeViewModel.diarizedSpeakerSegments
             )
         }
+        #if os(iOS)
+        // macOS reaches Settings through the window-toolbar entry, embedded in the detail
+        // column (no sheet); only iOS presents it from here.
         .sheet(isPresented: $showAdvancedOptions) {
             SettingsView(isPresented: $showAdvancedOptions, isStreamMode: false) {
-                guard transcribeViewModel.currentAudioPath != nil,
-                      !transcribeViewModel.isTranscribing,
-                      !transcribeViewModel.isDiarizing else { return }
-
-                let transcriptionChanged = transcriptionSettingsSignature() != transcriptionSignatureOnOpen
-                let diarizationChanged = diarizationSettingsSignature() != diarizationSignatureOnOpen
-
-                if transcriptionChanged {
-                    rerunTranscription()
-                } else if diarizationChanged {
-                    rerunDiarizationOnly()
-                }
+                rerunIfSettingsChanged(
+                    sinceTranscription: transcriptionSignatureOnOpen,
+                    diarization: diarizationSignatureOnOpen
+                )
             }
             .presentationDetents([.medium, .large])
             .presentationBackgroundInteraction(.enabled)
@@ -116,14 +179,60 @@ struct TranscribeTabView: View {
                 diarizationSignatureOnOpen = diarizationSettingsSignature()
             }
         }
+        #else
+        // Embedded Settings replaces this view in the detail column, so capture the settings
+        // signatures on the way out and rerun on the way back if they changed.
+        .onDisappear {
+            transcribeViewModel.settingsSignaturesOnDisappear =
+                (transcriptionSettingsSignature(), diarizationSettingsSignature())
+        }
+        .onAppear {
+            if let signatures = transcribeViewModel.settingsSignaturesOnDisappear {
+                transcribeViewModel.settingsSignaturesOnDisappear = nil
+                rerunIfSettingsChanged(sinceTranscription: signatures.transcription, diarization: signatures.diarization)
+            }
+        }
+        #endif
         .onChange(of: settings.sortformerMaxWordGap) { _, _ in reapplyMatchingIfPossible() }
         .onChange(of: settings.sortformerTolerance) { _, _ in reapplyMatchingIfPossible() }
-        .alert("Rename Speaker", isPresented: $transcribeViewModel.showSpeakerRenameAlert) {
-            TextField("Speaker Name", text: $transcribeViewModel.newSpeakerName)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") { transcribeViewModel.applySpeakerRename() }
-        } message: {
-            Text("Enter a new name for \(transcribeViewModel.speakerDisplayName(speakerId: transcribeViewModel.selectedSpeakerForRename))")
+        .alert(
+            "Rename Speaker",
+            isPresented: Binding(
+                get: { transcribeViewModel.pendingSpeakerRename != nil },
+                set: { presented in
+                    if !presented { transcribeViewModel.pendingSpeakerRename = nil }
+                }
+            ),
+            presenting: transcribeViewModel.pendingSpeakerRename
+        ) { speakerId in
+            TextField("Speaker Name", text: $speakerRenameDraft)
+            Button("Cancel", role: .cancel) {
+                transcribeViewModel.pendingSpeakerRename = nil
+            }
+            Button("Save") {
+                transcribeViewModel.applySpeakerRename(speakerId: speakerId, name: speakerRenameDraft)
+                transcribeViewModel.pendingSpeakerRename = nil
+            }
+        } message: { speakerId in
+            Text("Enter a new name for \(transcribeViewModel.speakerDisplayName(speakerId: speakerId))")
+        }
+        .onChange(of: transcribeViewModel.pendingSpeakerRename) { _, newValue in
+            // Seed the field with the current display name when the alert is raised.
+            if let speakerId = newValue {
+                speakerRenameDraft = transcribeViewModel.speakerDisplayName(speakerId: speakerId)
+            }
+        }
+        .alert(
+            "Couldn't continue",
+            isPresented: Binding(
+                get: { operationErrorMessage != nil },
+                set: { presented in if !presented { operationErrorMessage = nil } }
+            ),
+            presenting: operationErrorMessage
+        ) { _ in
+            Button("OK", role: .cancel) { operationErrorMessage = nil }
+        } message: { message in
+            Text(message)
         }
         #if os(macOS)
         .onDrop(of: [.audio, .fileURL], isTargeted: nil) { providers in
@@ -135,6 +244,8 @@ struct TranscribeTabView: View {
     // MARK: - Actions
 
     private func resetState() {
+        recordingTask?.cancel()
+        recordingTask = nil
         isRecording = false
         recordStartTime = nil
         pipelineStart = .greatestFiniteMagnitude
@@ -153,16 +264,25 @@ struct TranscribeTabView: View {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            if url.startAccessingSecurityScopedResource() {
-                defer { url.stopAccessingSecurityScopedResource() }
-                let tempURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(url.lastPathComponent)
-                try? FileManager.default.removeItem(at: tempURL)
-                try? FileManager.default.copyItem(at: url, to: tempURL)
-                transcribeFile(path: tempURL.path)
+            guard url.startAccessingSecurityScopedResource() else {
+                operationErrorMessage = "Couldn't access \(url.lastPathComponent). The system denied permission to read the file."
+                return
             }
+            defer { url.stopAccessingSecurityScopedResource() }
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(url.lastPathComponent)
+            // Best-effort removal of any stale copy; failure here is fine since the destination
+            // may not exist yet. The copy below is the operation whose failure matters.
+            try? FileManager.default.removeItem(at: tempURL)
+            do {
+                try FileManager.default.copyItem(at: url, to: tempURL)
+            } catch {
+                operationErrorMessage = "Couldn't stage \(url.lastPathComponent) for transcription: \(error.localizedDescription)"
+                return
+            }
+            transcribeFile(path: tempURL.path)
         case .failure(let error):
-            Logging.error("File selection error: \(error)")
+            operationErrorMessage = "File selection failed: \(error.localizedDescription)"
         }
     }
 
@@ -186,6 +306,11 @@ struct TranscribeTabView: View {
         isRecording.toggle()
         if isRecording {
             resetState()
+            // Restore recording state immediately after resetState clears it so the
+            // button stays in "Stop / timer" mode during the async permission check,
+            // preventing a double-tap window where the button re-enables as idle.
+            isRecording = true
+            recordStartTime = Date()
             startTranscribe()
         } else {
             stopTranscribe()
@@ -194,27 +319,43 @@ struct TranscribeTabView: View {
 
     private func startTranscribe() {
         #if os(macOS)
-        if audioDevicesDiscoverer.selectedAudioInput == AudioDeviceDiscoverer.noAudioDevice.name { return }
+        // "No Audio" means there is no mic to open. Bailing silently here used to leave the UI
+        // in a fake recording state -- `toggleRecording` has already flipped `isRecording`, so the
+        // timer ran, the waveform showed its flat placeholder, and Stop found no audio processor
+        // and produced no transcript. Undo the recording state and say what's wrong instead.
+        if audioDevicesDiscoverer.selectedAudioInput == AudioDeviceDiscoverer.noAudioDevice.name {
+            isRecording = false
+            recordStartTime = nil
+            operationErrorMessage = "No audio input is selected. Pick a microphone from the device menu below, then record again."
+            return
+        }
         #endif
-        Task {
-            guard await AudioProcessor.requestRecordPermission() else { return }
-            isRecording = true
-            recordStartTime = Date()
+        recordingTask = Task {
+            guard await AudioProcessor.requestRecordPermission() else {
+                isRecording = false
+                recordStartTime = nil
+                operationErrorMessage = "Microphone access is required to record. Grant permission in Settings -> Privacy & Security -> Microphone."
+                return
+            }
+            // The user may have tapped Stop during the permission await; bail rather than
+            // starting a recording that has no matching Stop to clean it up.
+            guard !Task.isCancelled, isRecording else { return }
             do {
                 try transcribeViewModel.startRecordAudio(
                     inputDeviceID: audioDevicesDiscoverer.selectedDeviceID
                 ) { _ in }
             } catch {
-                await MainActor.run {
-                    isRecording = false
-                    recordStartTime = nil
-                }
+                isRecording = false
+                recordStartTime = nil
+                operationErrorMessage = "Couldn't start recording: \(error.localizedDescription). Another app may be using the microphone."
                 Logging.error("Failed to start recording: \(error)")
             }
         }
     }
 
     private func stopTranscribe() {
+        recordingTask?.cancel()
+        recordingTask = nil
         isRecording = false
         recordStartTime = nil
         transcribeViewModel.stopRecordAndTranscribe(
@@ -250,7 +391,6 @@ struct TranscribeTabView: View {
     }
 
     private func reapplyMatchingIfPossible() {
-        guard #available(macOS 15, iOS 18, *) else { return }
         guard transcribeViewModel.hasConfirmedResults,
               !transcribeViewModel.isTranscribing,
               !transcribeViewModel.isDiarizing else { return }
@@ -268,6 +408,20 @@ struct TranscribeTabView: View {
         pipelineStart = transcription?.timings.pipelineStart ?? 0
     }
 
+    /// Reruns the pipeline when settings changed since `sinceTranscription`/`diarization`
+    /// were captured. Transcription changes rerun everything; diarization-only changes
+    /// rerun just diarization.
+    private func rerunIfSettingsChanged(sinceTranscription: String, diarization: String) {
+        guard transcribeViewModel.currentAudioPath != nil,
+              !transcribeViewModel.isTranscribing,
+              !transcribeViewModel.isDiarizing else { return }
+        if transcriptionSettingsSignature() != sinceTranscription {
+            rerunTranscription()
+        } else if diarizationSettingsSignature() != diarization {
+            rerunDiarizationOnly()
+        }
+    }
+
     private func transcriptionSettingsSignature() -> String {
         [
             settings.selectedTask,
@@ -275,7 +429,6 @@ struct TranscribeTabView: View {
             String(settings.enableTimestamps),
             String(settings.enableSpecialCharacters),
             String(settings.enablePromptPrefill),
-            String(settings.enableCachePrefill),
             String(settings.temperatureStart),
             String(settings.fallbackCount),
             String(settings.compressionCheckWindow),
@@ -283,6 +436,7 @@ struct TranscribeTabView: View {
             settings.chunkingStrategy.rawValue,
             String(settings.concurrentWorkerCount),
             settings.diarizationModeRaw,
+            String(settings.inverseTextNormalization),
         ].joined(separator: "|")
     }
 
@@ -297,19 +451,33 @@ struct TranscribeTabView: View {
     }
 
     private func saveToHistory(mode: SessionMode, source: String, result: TranscriptionResult?) {
+        let speakerSegments = transcribeViewModel.diarizedSpeakerSegments.isEmpty
+            ? nil
+            : transcribeViewModel.diarizedSpeakerSegments
+        // Replay trace: file/record sessions produce a single final result, so reconstruct a
+        // progressive, segment-timed trace so each session gets a shareable trace like streaming.
+        let segments = transcribeViewModel.confirmedSegments
+        let traceFileURL: URL? = (segments.isEmpty || !settings.captureReplayTraces) ? nil : StreamTrace.write(
+            model: settings.selectedModel.isEmpty ? "whisperkit" : settings.selectedModel,
+            startedAt: Date(),
+            entries: StreamTrace.entries(fromSegments: segments)
+        )
         sessionHistory.saveTranscribeSession(
-            settings: settings,
-            sdkCoordinator: sdkCoordinator,
-            mode: mode,
-            source: source,
-            diarizationMode: settings.diarizationModeRaw,
-            segments: transcribeViewModel.confirmedSegments,
-            speakerSegments: transcribeViewModel.diarizedSpeakerSegments.isEmpty ? nil : transcribeViewModel.diarizedSpeakerSegments,
-            result: result,
-            diarizationTimings: transcribeViewModel.lastDiarizationTimings,
-            diarizationDurationMs: transcribeViewModel.lastDiarizationDurationMs,
-            audioFileURL: transcribeViewModel.currentAudioPath.map { URL(fileURLWithPath: $0) },
-            audioDuration: transcribeViewModel.audioSampleDuration
+            .init(
+                settings: settings,
+                mode: mode,
+                source: source,
+                diarizationMode: settings.diarizationModeRaw,
+                segments: segments,
+                speakerSegments: speakerSegments,
+                result: result,
+                diarizationTimings: transcribeViewModel.lastDiarizationTimings,
+                diarizationDurationMs: transcribeViewModel.lastDiarizationDurationMs,
+                audioFileURL: transcribeViewModel.currentAudioPath.map { URL(fileURLWithPath: $0) },
+                traceFileURL: traceFileURL,
+                audioDuration: transcribeViewModel.audioSampleDuration,
+                customVocabularyWords: sdkCoordinator.currentCustomVocabularyWords
+            )
         )
     }
 
@@ -359,7 +527,7 @@ private struct TranscribeControlsArea: View, Equatable {
         lhs.isTranscribing == rhs.isTranscribing &&
         lhs.isDiarizing == rhs.isDiarizing &&
         lhs.areModelsReady == rhs.areModelsReady &&
-        (lhs.recordStartTime != nil) == (rhs.recordStartTime != nil) && // presence only — TimelineView handles display
+        (lhs.recordStartTime != nil) == (rhs.recordStartTime != nil) && // presence only -- TimelineView handles display
         lhs.isDiarizePyannote == rhs.isDiarizePyannote &&
         lhs.minSpeakerCountDisplay == rhs.minSpeakerCountDisplay &&
         lhs.lastTranscriptionTimings?.tokensPerSecond == rhs.lastTranscriptionTimings?.tokensPerSecond &&
@@ -372,23 +540,25 @@ private struct TranscribeControlsArea: View, Equatable {
 
     var body: some View {
         VStack(spacing: 8) {
-            Picker("", selection: $selectedMode) {
+            Picker("Mode", selection: $selectedMode) {
                 ForEach(TabMode.allCases, id: \.self) { mode in
                     Text(mode.rawValue)
                 }
             }
+            .labelsHidden()
             .pickerStyle(.segmented)
 
             if selectedMode == .diarize && isDiarizePyannote {
                 HStack {
                     Label("Speakers", systemImage: "person.2")
-                    Picker("", selection: Binding(
+                    Picker("Minimum speaker count", selection: Binding(
                         get: { minSpeakerCountDisplay },
                         set: { onSpeakerCountChange($0) }
                     )) {
                         Text("Auto").tag(0)
                         ForEach(1...5, id: \.self) { Text("\($0)").tag($0) }
                     }
+                    .labelsHidden()
                     .frame(width: 80)
                 }
                 .frame(maxWidth: 200)
@@ -431,6 +601,7 @@ private struct TranscribeControlsArea: View, Equatable {
                                     .foregroundStyle(.white.opacity(0.7))
                                     .monospacedDigit()
                                     .frame(minWidth: 32, alignment: .leading)
+                                    .accessibilityHidden(true)
                             }
                             .font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 12)
@@ -439,7 +610,7 @@ private struct TranscribeControlsArea: View, Equatable {
                     } else {
                         HStack(spacing: 8) {
                             Image(systemName: "mic.fill")
-                            Text("Record")
+                            Text("Dictate")
                         }
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 12)
@@ -447,6 +618,7 @@ private struct TranscribeControlsArea: View, Equatable {
                     }
                 }
                 .glassProminentButtonStyle()
+                .accessibilityLabel(isRecording ? "Stop dictation" : "Start dictation")
                 .tint(isRecording ? .red : .accentColor)
                 .contentTransition(.symbolEffect(.replace))
                 .disabled(!areModelsReady || isDiarizing || isTranscribing)

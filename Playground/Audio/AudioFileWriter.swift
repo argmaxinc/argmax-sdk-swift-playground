@@ -3,8 +3,9 @@ import AVFoundation
 import Argmax
 
 /// Writes raw PCM audio samples to a WAV file in the temp directory.
-/// Thread-safe: append can be called from any thread.
-class AudioFileWriter {
+///
+/// Thread-safe: `append` and `finalize` may be called from any thread.
+final class AudioFileWriter {
     let outputURL: URL
     private var audioFile: AVAudioFile?
     private let format: AVAudioFormat
@@ -36,8 +37,8 @@ class AudioFileWriter {
         }
     }
 
-    /// Append float samples to the WAV file
     func append(samples: [Float]) {
+        guard !samples.isEmpty else { return }
         queue.async { [weak self] in
             guard let self, let audioFile = self.audioFile else { return }
             guard let buffer = AVAudioPCMBuffer(
@@ -47,8 +48,8 @@ class AudioFileWriter {
 
             buffer.frameLength = AVAudioFrameCount(samples.count)
             if let channelData = buffer.floatChannelData?[0] {
-                for i in 0..<samples.count {
-                    channelData[i] = samples[i]
+                samples.withUnsafeBufferPointer { src in
+                    channelData.update(from: src.baseAddress!, count: samples.count)
                 }
             }
 
@@ -60,7 +61,7 @@ class AudioFileWriter {
         }
     }
 
-    /// Finalize writing and return the file URL
+    /// Closes the underlying file and returns its URL. Subsequent `append` calls become no-ops.
     func finalize() -> URL {
         queue.sync {
             self.audioFile = nil
@@ -68,7 +69,6 @@ class AudioFileWriter {
         return outputURL
     }
 
-    /// Duration of the written audio in seconds
     var duration: TimeInterval {
         queue.sync {
             guard let audioFile else { return 0 }

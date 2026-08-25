@@ -34,7 +34,7 @@ struct WaveformView: View {
             guard visibleCount > 0 else { return }
 
             var greenPath = Path()
-            var redPath = Path()
+            var grayPath = Path()
 
             for i in 0..<visibleCount {
                 let sample = samples[startIndex + i]
@@ -50,12 +50,12 @@ struct WaveformView: View {
                 if clamped > silenceThreshold {
                     greenPath.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
                 } else {
-                    redPath.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+                    grayPath.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
                 }
             }
 
             context.fill(greenPath, with: .color(.green))
-            context.fill(redPath, with: .color(.red))
+            context.fill(grayPath, with: .color(.gray))
         }
     }
 }

@@ -51,7 +51,10 @@ struct ExportSheet: View {
             }
             .pickerStyle(.segmented)
 
+            // Timing lines are structural in SRT/VTT and always present in JSON; the toggle
+            // only affects plain text.
             Toggle("Include timestamps", isOn: $includeTimestamps)
+                .disabled(selectedFormat != .txt)
             if let segments = speakerSegments, !segments.isEmpty {
                 Toggle("Include speaker labels", isOn: $includeSpeakerLabels)
             }
@@ -107,8 +110,8 @@ struct ExportSheet: View {
 
     private func generateExport() -> String {
         switch selectedFormat {
-        case .srt: return ExportFormatters.toSRT(segments: segments, speakerSegments: speakerSegments, includeTimestamps: includeTimestamps, includeSpeakers: includeSpeakerLabels)
-        case .vtt: return ExportFormatters.toVTT(segments: segments, speakerSegments: speakerSegments, includeTimestamps: includeTimestamps, includeSpeakers: includeSpeakerLabels)
+        case .srt: return ExportFormatters.toSRT(segments: segments, speakerSegments: speakerSegments, includeSpeakers: includeSpeakerLabels)
+        case .vtt: return ExportFormatters.toVTT(segments: segments, speakerSegments: speakerSegments, includeSpeakers: includeSpeakerLabels)
         case .json: return ExportFormatters.toJSON(segments: segments, speakerSegments: speakerSegments, includeSpeakers: includeSpeakerLabels)
         case .txt: return ExportFormatters.toPlainText(segments: segments, speakerSegments: speakerSegments, includeTimestamps: includeTimestamps, includeSpeakers: includeSpeakerLabels)
         }
@@ -136,10 +139,12 @@ struct ExportDocument: FileDocument {
 // MARK: - Pure Formatting Functions
 
 enum ExportFormatters {
+    /// SRT spec uses CRLF line endings; we honor that for Windows-player compatibility.
+    private static let subtitleLineEnding = "\r\n"
+
     static func toSRT(
         segments: [TranscriptionSegment],
         speakerSegments: [SpeakerSegment]?,
-        includeTimestamps: Bool,
         includeSpeakers: Bool
     ) -> String {
         let items = if includeSpeakers, let segs = speakerSegments, !segs.isEmpty {
@@ -150,18 +155,15 @@ enum ExportFormatters {
 
         return items.enumerated().map { index, item in
             let idx = index + 1
-            let timeStr = includeTimestamps ? formatSRTTime(item.start) + " --> " + formatSRTTime(item.end) : ""
             let speaker = if includeSpeakers, let spk = item.speaker { "[\(spk)] " } else { "" }
-            return includeTimestamps
-                ? "\(idx)\n\(timeStr)\n\(speaker)\(item.text)\n"
-                : "\(idx)\n\(speaker)\(item.text)\n"
-        }.joined(separator: "\n")
+            let timeStr = formatSRTTime(item.start) + " --> " + formatSRTTime(item.end)
+            return "\(idx)\(subtitleLineEnding)\(timeStr)\(subtitleLineEnding)\(speaker)\(item.text)\(subtitleLineEnding)"
+        }.joined(separator: subtitleLineEnding)
     }
 
     static func toVTT(
         segments: [TranscriptionSegment],
         speakerSegments: [SpeakerSegment]?,
-        includeTimestamps: Bool,
         includeSpeakers: Bool
     ) -> String {
         let items = if includeSpeakers, let segs = speakerSegments, !segs.isEmpty {
@@ -172,14 +174,12 @@ enum ExportFormatters {
 
         var lines = ["WEBVTT", ""]
         for item in items {
-            if includeTimestamps {
-                lines.append(formatVTTTime(item.start) + " --> " + formatVTTTime(item.end))
-            }
+            lines.append(formatVTTTime(item.start) + " --> " + formatVTTTime(item.end))
             let speaker = if includeSpeakers, let spk = item.speaker { "<v \(spk)>" } else { "" }
             lines.append("\(speaker)\(item.text)")
             lines.append("")
         }
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: subtitleLineEnding)
     }
 
     static func toJSON(

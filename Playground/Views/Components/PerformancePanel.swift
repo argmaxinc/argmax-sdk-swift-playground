@@ -100,7 +100,9 @@ struct PerformancePanel: View {
                 metricBadge("Tokens/s", value: String(format: "%.1f", timings.tokensPerSecond))
                 metricBadge("RTF", value: String(format: "%.3f", timings.realTimeFactor))
                 metricBadge("Speed", value: String(format: "%.1fx", timings.speedFactor))
-                metricBadge("1st Token", value: String(format: "%.2fs", timings.firstTokenTime - timings.pipelineStart))
+                if let latency = timings.firstTokenLatency {
+                    metricBadge("1st Token", value: String(format: "%.2fs", latency))
+                }
                 metricBadge("Enc Runs", value: "\(Int(timings.totalEncodingRuns))")
                 metricBadge("Dec Loops", value: "\(Int(timings.totalDecodingLoops))")
             }
@@ -207,10 +209,14 @@ struct PerformancePanel: View {
         }
     }
 
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
     private func timeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
+        Self.clockFormatter.string(from: date)
     }
 
     // Memory info helper (simplified from ContentView)

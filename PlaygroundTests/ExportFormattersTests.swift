@@ -9,21 +9,24 @@ final class ExportFormattersTests: XCTestCase {
     ]
 
     func testSRTFormat() {
-        let srt = ExportFormatters.toSRT(segments: segments, speakerSegments: nil, includeTimestamps: true, includeSpeakers: false)
+        let srt = ExportFormatters.toSRT(segments: segments, speakerSegments: nil, includeSpeakers: false)
         XCTAssertTrue(srt.contains("00:00:00,000 --> 00:00:02,500"), "SRT should contain proper timestamp format")
         XCTAssertTrue(srt.contains("Hello world."), "SRT should contain segment text")
-        XCTAssertTrue(srt.contains("1\n"), "SRT should contain sequence numbers")
-        XCTAssertTrue(srt.contains("2\n"), "SRT should contain second sequence number")
+        XCTAssertTrue(srt.contains("1\r\n"), "SRT should contain sequence numbers (with CRLF per spec)")
+        XCTAssertTrue(srt.contains("2\r\n"), "SRT should contain second sequence number (with CRLF per spec)")
     }
 
-    func testSRTWithoutTimestamps() {
-        let srt = ExportFormatters.toSRT(segments: segments, speakerSegments: nil, includeTimestamps: false, includeSpeakers: false)
-        XCTAssertFalse(srt.contains("-->"), "SRT without timestamps should not contain arrow")
-        XCTAssertTrue(srt.contains("Hello world."))
+    func testSRTUsesCRLFLineEndings() {
+        let srt = ExportFormatters.toSRT(segments: segments, speakerSegments: nil, includeSpeakers: false)
+        // Per SRT convention, line breaks should be CRLF for cross-player compatibility.
+        XCTAssertTrue(srt.contains("\r\n"), "SRT should use CRLF line endings")
+        let totalNewlines = srt.components(separatedBy: "\n").count - 1
+        let crlfPairs = srt.components(separatedBy: "\r\n").count - 1
+        XCTAssertEqual(totalNewlines, crlfPairs, "Every \\n should be part of a CRLF pair")
     }
 
     func testVTTFormat() {
-        let vtt = ExportFormatters.toVTT(segments: segments, speakerSegments: nil, includeTimestamps: true, includeSpeakers: false)
+        let vtt = ExportFormatters.toVTT(segments: segments, speakerSegments: nil, includeSpeakers: false)
         XCTAssertTrue(vtt.hasPrefix("WEBVTT"), "VTT should start with WEBVTT header")
         XCTAssertTrue(vtt.contains("00:00:00.000 --> 00:00:02.500"), "VTT should use dot separator for ms")
     }
@@ -49,7 +52,7 @@ final class ExportFormattersTests: XCTestCase {
     }
 
     func testEmptySegments() {
-        let srt = ExportFormatters.toSRT(segments: [], speakerSegments: nil, includeTimestamps: true, includeSpeakers: false)
+        let srt = ExportFormatters.toSRT(segments: [], speakerSegments: nil, includeSpeakers: false)
         XCTAssertTrue(srt.isEmpty, "Empty segments should produce empty SRT")
 
         let json = ExportFormatters.toJSON(segments: [], speakerSegments: nil, includeSpeakers: false)

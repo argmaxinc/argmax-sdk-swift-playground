@@ -32,8 +32,7 @@ import AppKit
 /// bundle identifier, name, and running state. It provides functionality to monitor and interact
 /// with audio-producing processes on macOS systems.
 ///
-/// The class includes special static instances for system audio and no audio selection scenarios,
-/// making it suitable for use in audio source selection interfaces.
+/// Includes a `noAudio` sentinel for "no source selected" in audio-source pickers.
 ///
 /// ## Usage Example
 ///
@@ -42,12 +41,11 @@ import AppKit
 /// let audioProcess = AudioProcess(id: processID)
 /// print("Process: \(audioProcess.name), Running: \(audioProcess.isRunning)")
 ///
-/// // Use special instances
-/// let systemAudio = AudioProcess.systemAudio
+/// // Sentinel for "no source selected"
 /// let noAudio = AudioProcess.noAudio
 /// ```
 @available(macOS 14.2, *)
-class AudioProcess: Identifiable, Hashable, ObservableObject {
+final class AudioProcess: Identifiable, Hashable, ObservableObject {
     var id: AudioObjectID
     var pid: Int32 = 0
     var name: String = ""
@@ -55,36 +53,39 @@ class AudioProcess: Identifiable, Hashable, ObservableObject {
     /// Only running process is producing audio
     /// Note: when an audio is paused from a process, it will stop running after a short delay
     var isRunning = false
-    
-    
-    // Static instance for system audio selection
-    // TODO - support system audio tapping
-    static let systemAudio = AudioProcess(systemAudio: true)
-    
-    // Static instance for no audio selection
-    static let noAudio = AudioProcess(noAudio: true)
-    
-    // Private initializer for system audio
-    private init(systemAudio: Bool) {
-        self.id = AudioObjectID(UInt32.max) // Special ID for system audio
-        self.pid = -1
-        self.name = "System Audio"
-        self.bundleID = "system.audio"
+
+    /// Sentinel "no audio source selected" instance. Carries a special ID outside the real
+    /// `AudioObjectID` range so equality with real processes is impossible by construction.
+    /// Skips the CoreAudio property fetch that `init(id:)` performs, since the sentinel ID
+    /// doesn't correspond to a CoreAudio object.
+    static let noAudio: AudioProcess = {
+        let process = AudioProcess(
+            sentinelId: AudioObjectID(UInt32.max - 1),
+            pid: -2,
+            name: "No Audio",
+            bundleID: "no.audio"
+        )
+        return process
+    }()
+
+    /// Direct-field initializer for sentinel instances that don't correspond to a real
+    /// CoreAudio process. Internal because callers should use the named static instances.
+    private init(sentinelId: AudioObjectID, pid: Int32, name: String, bundleID: String) {
+        self.id = sentinelId
+        self.pid = pid
+        self.name = name
+        self.bundleID = bundleID
         self.isRunning = true
     }
-    
-    // Private initializer for no audio
-    private init(noAudio: Bool) {
-        self.id = AudioObjectID(UInt32.max - 1) // Special ID for no audio
-        self.pid = -2
-        self.name = "No Audio"
-        self.bundleID = "no.audio"
-        self.isRunning = true
-    }
-    
-    init(id: AudioObjectID) {
+
+    /// - Parameter localizedAppNames: Optional pre-captured map of `pid -> NSRunningApplication.localizedName`,
+    ///   used to resolve process display names without touching `NSWorkspace` from a background
+    ///   thread (`NSWorkspace` is not documented as thread-safe). When `nil` or missing, falls
+    ///   back to `sysctl`-based naming. Callers on a background queue MUST capture this map on
+    ///   the main thread first; see `AudioProcessDiscoverer.refreshProcessList`.
+    init(id: AudioObjectID, localizedAppNames: [Int32: String]? = nil) {
         self.id = id
-        
+
         // Get the bundle ID of the audio process.
         var propertyAddress = getPropertyAddress(selector: kAudioProcessPropertyBundleID)
         var propertySize = UInt32(MemoryLayout<CFString>.stride)
@@ -93,24 +94,27 @@ class AudioProcess: Identifiable, Hashable, ObservableObject {
             AudioObjectGetPropertyData(id, &propertyAddress, 0, nil, &propertySize, bundleID)
         }
         self.bundleID = bundleID as String
-        
+
         // Get the PID of the audio process.
         propertyAddress = getPropertyAddress(selector: kAudioProcessPropertyPID)
         propertySize = UInt32(MemoryLayout<Int32>.stride)
         var processPID: Int32 = 0
         AudioObjectGetPropertyData(id, &propertyAddress, 0, nil, &propertySize, &processPID)
         self.pid = processPID
-        
-        self.name = processNameFromPID(pid: self.pid)
+
+        self.name = Self.resolveName(pid: self.pid, localizedAppNames: localizedAppNames)
         self.updateIsRunning()
-        
     }
     static func == (lhs: AudioProcess, rhs: AudioProcess) -> Bool {
         return lhs.id == rhs.id
     }
-    
+
+    /// Hashes by `id` so the Hashable contract holds with the `==` implementation above
+    /// (`a == b => a.hashValue == b.hashValue`). Two instances with the same `AudioObjectID`
+    /// represent the same audio source and produce the same hash, keeping
+    /// `Set<AudioProcess>` and `[AudioProcess: T]` lookups correct.
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(ObjectIdentifier(self))
+        hasher.combine(id)
     }
     
     
@@ -123,13 +127,13 @@ class AudioProcess: Identifiable, Hashable, ObservableObject {
         self.isRunning = running != 0
     }
     
-    private func processNameFromPID(pid: Int32) -> String {
-        // Try to get the localized process name from the app using `NSWorkspace`.
-        for app in NSWorkspace.shared.runningApplications where app.processIdentifier == pid {
-            return app.localizedName ?? ""
-        }
+    /// Resolves a process display name from a pre-captured `NSWorkspace` map (cheap, requires
+    /// caller to have called `Self.snapshotLocalizedAppNames()` on the main thread), falling
+    /// back to `sysctl` (thread-safe) when the pid isn't in the map.
+    private static func resolveName(pid: Int32, localizedAppNames: [Int32: String]?) -> String {
+        if let name = localizedAppNames?[pid] { return name }
 
-        // Otherwise use `sysctl` to obtain the process name.
+        // sysctl-based fallback. Safe to call off-main.
         var result: String = ""
         var info = kinfo_proc()
         var len = MemoryLayout<kinfo_proc>.stride
@@ -139,6 +143,21 @@ class AudioProcess: Identifiable, Hashable, ObservableObject {
                 $0.withMemoryRebound(to: UInt8.self, capacity: len) {
                     result = String(cString: $0)
                 }
+            }
+        }
+        return result
+    }
+
+    /// Snapshots `NSWorkspace.runningApplications` into a `[pid: localizedName]` map. The
+    /// `@MainActor` annotation enforces that callers capture the snapshot on the main thread
+    /// (`NSWorkspace` is not documented as thread-safe) before handing it to
+    /// `init(id:localizedAppNames:)` on a background queue.
+    @MainActor
+    static func snapshotLocalizedAppNames() -> [Int32: String] {
+        var result: [Int32: String] = [:]
+        for app in NSWorkspace.shared.runningApplications {
+            if let name = app.localizedName {
+                result[app.processIdentifier] = name
             }
         }
         return result
